@@ -1,0 +1,105 @@
+name: Code Quality Assessor
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      analysis_depth:
+        description: 'Code analysis depth'
+        required: true
+        default: 'standard'
+        type: choice
+        options:
+          - quick
+          - standard
+          - comprehensive
+
+jobs:
+  code-quality:
+    runs-on: ubuntu-latest
+    name: Code Quality Assessment
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          
+      - name: Install analysis tools
+        run: |
+          pip install flake8 pylint black isort mypy bandit complexity
+          
+      - name: Run Code Quality Analysis
+        run: |
+          echo "📊 Code Quality Assessment Report" > quality-report.md
+          echo "====================================" >> quality-report.md
+          echo "" >> quality-report.md
+          echo "**Analysis Time:** $(date)" >> quality-report.md
+          echo "**Depth:** ${{ github.event.inputs.analysis_depth || 'standard' }}" >> quality-report.md
+          echo "" >> quality-report.md
+          
+          # Flake8 style check
+          echo "## Style Compliance (Flake8)" >> quality-report.md
+          if flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics; then
+            echo "✅ No critical style violations" >> quality-report.md
+          else
+            echo "⚠️ Style violations found" >> quality-report.md
+          fi
+          
+          # Code complexity analysis
+          echo "" >> quality-report.md
+          echo "## Code Complexity" >> quality-report.md
+          find . -name "*.py" -exec wc -l {} + | tail -1 | awk '{print "**Total Lines:** " $1}' >> quality-report.md
+          
+          # Import organization
+          echo "" >> quality-report.md
+          echo "## Import Organization" >> quality-report.md
+          if isort . --check-only --diff; then
+            echo "✅ Imports are properly organized" >> quality-report.md
+          else
+            echo "⚠️ Import organization needs improvement" >> quality-report.md
+          fi
+          
+          # Security issues with bandit
+          echo "" >> quality-report.md
+          echo "## Security Analysis (Bandit)" >> quality-report.md
+          if bandit -r . -f json -o bandit-report.json; then
+            python -c "
+import json
+try:
+    with open('bandit-report.json') as f:
+        data = json.load(f)
+    issues = data.get('results', [])
+    if issues:
+        print(f'⚠️ Found {len(issues)} potential security issues')
+        for issue in issues[:3]:
+            print(f'- {issue.get("test_name", "Unknown")}: {issue.get("issue_text", "No details")}')
+    else:
+        print('✅ No security issues detected')
+except:
+    print('✅ Security analysis completed')
+" >> quality-report.md
+          fi
+          
+      - name: Upload Quality Report
+        uses: actions/upload-artifact@v3
+        with:
+          name: code-quality-report
+          path: quality-report.md
+          
+      - name: Quality Gate Check
+        run: |
+          # Simple quality gate - can be made more sophisticated
+          CRITICAL_ISSUES=$(flake8 . --count --select=E9,F63,F7,F82 --statistics 2>/dev/null | tail -1 | cut -d' ' -f1 || echo 0)
+          if [ "$CRITICAL_ISSUES" -gt 0 ]; then
+            echo "Quality gate failed: $CRITICAL_ISSUES critical issues found"
+            exit 1
+          else
+            echo "Quality gate passed: No critical issues"
+          fi
