@@ -1,0 +1,124 @@
+name: Interactive System Assessor
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      assessment_command:
+        description: 'Assessment command'
+        required: true
+        default: 'health-check'
+        type: choice
+        options:
+          - health-check
+          - security-audit
+          - performance-test
+          - code-review
+          - dependency-check
+
+jobs:
+  interactive-assessment:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.comment.body, '/assess')
+    name: Interactive Assessment
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        
+      - name: Parse Assessment Command
+        id: parse-command
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            COMMAND="${{ github.event.inputs.assessment_command }}"
+          else
+            COMMENT="${{ github.event.comment.body }}"
+            if echo "$COMMENT" | grep -q "/assess health"; then
+              COMMAND="health-check"
+            elif echo "$COMMENT" | grep -q "/assess security"; then
+              COMMAND="security-audit"
+            elif echo "$COMMENT" | grep -q "/assess performance"; then
+              COMMAND="performance-test"
+            else
+              COMMAND="health-check"
+            fi
+          fi
+          echo "command=$COMMAND" >> $GITHUB_OUTPUT
+          echo "Assessment command: $COMMAND"
+          
+      - name: Run Health Check
+        if: steps.parse-command.outputs.command == 'health-check'
+        run: |
+          echo "🏥 System Health Assessment" > assessment-result.md
+          echo "=========================" >> assessment-result.md
+          echo "" >> assessment-result.md
+          echo "**Assessment Time:** $(date)" >> assessment-result.md
+          echo "**Trigger:** ${{ github.event_name }}" >> assessment-result.md
+          echo "" >> assessment-result.md
+          
+          # Repository health
+          echo "## Repository Health" >> assessment-result.md
+          echo "**Files:** $(find . -type f -name "*.py" | wc -l) Python files" >> assessment-result.md
+          echo "**Size:** $(du -sh . | cut -f1)" >> assessment-result.md
+          
+          # Git health
+          echo "## Git Health" >> assessment-result.md
+          echo "**Branch:** $(git branch --show-current)" >> assessment-result.md
+          echo "**Last Commit:** $(git log -1 --format='%h - %s (%cr)')" >> assessment-result.md
+          
+          # Dependencies health
+          echo "## Dependencies Health" >> assessment-result.md
+          if [ -f "requirements.txt" ]; then
+            echo "**Python Dependencies:** $(wc -l < requirements.txt) packages" >> assessment-result.md
+          else
+            echo "**Python Dependencies:** No requirements.txt found" >> assessment-result.md
+          fi
+          
+          echo "✅ System health check completed" >> assessment-result.md
+          
+      - name: Run Security Audit
+        if: steps.parse-command.outputs.command == 'security-audit'
+        run: |
+          echo "🔒 Security Audit Results" > assessment-result.md
+          echo "========================" >> assessment-result.md
+          pip install safety bandit
+          echo "Running security audit..." >> assessment-result.md
+          bandit -r . -f txt >> assessment-result.md || echo "Security audit completed" >> assessment-result.md
+          
+      - name: Run Performance Test
+        if: steps.parse-command.outputs.command == 'performance-test'
+        run: |
+          echo "⚡ Performance Test Results" > assessment-result.md
+          echo "==========================" >> assessment-result.md
+          python -c "
+import time
+import sys
+start = time.time()
+# Simple performance test
+result = sum(i*i for i in range(100000))
+end = time.time()
+print(f'**Computation Test:** {end-start:.4f} seconds')
+print(f'**Result:** {result}')
+print('✅ Performance test completed')
+" >> assessment-result.md
+          
+      - name: Comment Assessment Results
+        if: github.event_name == 'issue_comment'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const result = fs.readFileSync('assessment-result.md', 'utf8');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '## 🤖 Interactive Assessment Results\n\n' + result
+            });
+            
+      - name: Upload Assessment Results
+        uses: actions/upload-artifact@v3
+        with:
+          name: interactive-assessment-results
+          path: assessment-result.md
