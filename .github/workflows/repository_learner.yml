@@ -1,0 +1,313 @@
+name: Repository Learning Assessor
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      learning_mode:
+        description: 'Learning analysis mode'
+        required: true
+        default: 'comprehensive'
+        type: choice
+        options:
+          - quick
+          - comprehensive
+          - pattern_extraction
+          - architecture_analysis
+
+jobs:
+  repository-learning:
+    runs-on: ubuntu-latest
+    name: Repository Learning Analysis
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Full history for pattern analysis
+          
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          
+      - name: Install analysis tools
+        run: |
+          pip install ast-analysis networkx gitpython pandas matplotlib
+          
+      - name: Analyze Repository Patterns
+        run: |
+          echo "🧠 Repository Learning Analysis" > learning-report.md
+          echo "===============================" >> learning-report.md
+          echo "" >> learning-report.md
+          echo "**Analysis Time:** $(date)" >> learning-report.md
+          echo "**Learning Mode:** ${{ github.event.inputs.learning_mode || 'comprehensive' }}" >> learning-report.md
+          echo "**Repository:** ${{ github.repository }}" >> learning-report.md
+          echo "" >> learning-report.md
+          
+          # Repository structure analysis
+          echo "## Repository Structure" >> learning-report.md
+          echo "**Total Files:** $(find . -type f | wc -l)" >> learning-report.md
+          echo "**Python Files:** $(find . -name "*.py" | wc -l)" >> learning-report.md
+          echo "**Configuration Files:** $(find . -name "*.yml" -o -name "*.yaml" -o -name "*.json" -o -name "*.toml" | wc -l)" >> learning-report.md
+          echo "" >> learning-report.md
+          
+          # Code pattern analysis
+          echo "## Code Patterns Detected" >> learning-report.md
+          python3 << 'PYTHON_EOF'
+import os
+import ast
+import json
+from collections import defaultdict
+
+patterns = defaultdict(int)
+functions = []
+classes = []
+imports = defaultdict(int)
+
+def analyze_file(filepath):
+    try:
+        with open(filepath, 'r') as f:
+            content = f.read()
+            tree = ast.parse(content)
+            
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef):
+                functions.append({
+                    'name': node.name,
+                    'file': filepath,
+                    'args': len(node.args.args),
+                    'has_docstring': ast.get_docstring(node) is not None
+                })
+                patterns['functions'] += 1
+                
+                # Detect patterns
+                if node.name.startswith('_'):
+                    patterns['private_methods'] += 1
+                if any(decorator.id == 'property' for decorator in node.decorator_list if hasattr(decorator, 'id')):
+                    patterns['properties'] += 1
+                    
+            elif isinstance(node, ast.ClassDef):
+                classes.append({
+                    'name': node.name,
+                    'file': filepath,
+                    'methods': len([n for n in node.body if isinstance(n, ast.FunctionDef)]),
+                    'has_docstring': ast.get_docstring(node) is not None
+                })
+                patterns['classes'] += 1
+                
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    imports[alias.name] += 1
+                    
+            elif isinstance(node, ast.ImportFrom):
+                module = node.module or 'local'
+                imports[module] += 1
+                
+            # Advanced patterns
+            if isinstance(node, ast.Try):
+                patterns['error_handling'] += 1
+            if isinstance(node, ast.With):
+                patterns['context_managers'] += 1
+            if isinstance(node, ast.ListComp):
+                patterns['list_comprehensions'] += 1
+                
+    except Exception as e:
+        print(f"Error analyzing {filepath}: {e}")
+
+# Analyze all Python files
+for root, dirs, files in os.walk('.'):
+    for file in files:
+        if file.endswith('.py'):
+            filepath = os.path.join(root, file)
+            analyze_file(filepath)
+
+print("### Detected Patterns")
+for pattern, count in sorted(patterns.items(), key=lambda x: x[1], reverse=True):
+    print(f"- **{pattern.replace('_', ' ').title()}:** {count}")
+
+print("\n### Most Used Imports")
+for module, count in sorted(imports.items(), key=lambda x: x[1], reverse=True)[:10]:
+    print(f"- **{module}:** {count} times")
+
+print("\n### Function Analysis")
+print(f"- **Total Functions:** {len(functions)}")
+documented_funcs = len([f for f in functions if f['has_docstring']])
+print(f"- **Documented Functions:** {documented_funcs} ({100*documented_funcs/len(functions):.1f}%)" if functions else "- **Documented Functions:** 0")
+
+print("\n### Class Analysis")
+print(f"- **Total Classes:** {len(classes)}")
+if classes:
+    avg_methods = sum(c['methods'] for c in classes) / len(classes)
+    print(f"- **Average Methods per Class:** {avg_methods:.1f}")
+
+# Save learning data
+learning_data = {
+    'patterns': dict(patterns),
+    'functions': functions,
+    'classes': classes,
+    'imports': dict(imports),
+    'analysis_timestamp': '$(date -Iseconds)',
+    'repository': '${{ github.repository }}'
+}
+
+with open('repository-learning-data.json', 'w') as f:
+    json.dump(learning_data, f, indent=2)
+
+print("\n### Learning Data Saved")
+print("- **File:** repository-learning-data.json")
+print("- **Functions Catalogued:** " + str(len(functions)))
+print("- **Classes Catalogued:** " + str(len(classes)))
+print("- **Patterns Identified:** " + str(len(patterns)))
+PYTHON_EOF
+          
+          # Git history analysis for learning patterns
+          echo "" >> learning-report.md
+          echo "## Development Patterns" >> learning-report.md
+          echo "**Commit Count:** $(git rev-list --count HEAD)" >> learning-report.md
+          echo "**Contributors:** $(git log --format='%an' | sort -u | wc -l)" >> learning-report.md
+          echo "**Latest Activity:** $(git log -1 --format='%cr')" >> learning-report.md
+          
+          # File change patterns
+          echo "" >> learning-report.md
+          echo "### Most Modified Files" >> learning-report.md
+          git log --name-only --pretty=format: | sort | uniq -c | sort -nr | head -5 | while read count file; do
+            if [ ! -z "$file" ]; then
+              echo "- **$file:** $count modifications" >> learning-report.md
+            fi
+          done
+          
+          # Architecture insights
+          echo "" >> learning-report.md
+          echo "## Architecture Insights" >> learning-report.md
+          
+          # Detect architectural patterns
+          if [ -f "app.py" ]; then
+            echo "- **Framework:** Streamlit web application detected" >> learning-report.md
+          fi
+          
+          if [ -d ".github/workflows" ]; then
+            workflow_count=$(find .github/workflows -name "*.yml" | wc -l)
+            echo "- **CI/CD:** $workflow_count GitHub Actions workflows" >> learning-report.md
+          fi
+          
+          if [ -f "requirements.txt" ]; then
+            dep_count=$(wc -l < requirements.txt)
+            echo "- **Dependencies:** $dep_count Python packages" >> learning-report.md
+          fi
+          
+          # Learning recommendations
+          echo "" >> learning-report.md
+          echo "## Learning Recommendations" >> learning-report.md
+          echo "Based on the analysis, here are optimization opportunities:" >> learning-report.md
+          
+          # Generate recommendations based on patterns
+          python3 << 'RECOMMENDATIONS_EOF'
+import json
+
+try:
+    with open('repository-learning-data.json', 'r') as f:
+        data = json.load(f)
+    
+    patterns = data.get('patterns', {})
+    functions = data.get('functions', [])
+    classes = data.get('classes', [])
+    
+    recommendations = []
+    
+    # Documentation recommendations
+    documented_funcs = len([f for f in functions if f['has_docstring']])
+    total_funcs = len(functions)
+    if total_funcs > 0 and documented_funcs / total_funcs < 0.8:
+        recommendations.append(f"Improve documentation: Only {100*documented_funcs/total_funcs:.1f}% of functions have docstrings")
+    
+    # Error handling recommendations
+    if patterns.get('error_handling', 0) < patterns.get('functions', 0) * 0.3:
+        recommendations.append("Consider adding more error handling patterns to improve robustness")
+    
+    # Code organization recommendations
+    if patterns.get('classes', 0) == 0 and patterns.get('functions', 0) > 10:
+        recommendations.append("Consider organizing functions into classes for better code structure")
+    
+    # Testing recommendations
+    test_files = len([f for f in functions if 'test' in f['name'].lower() or 'test' in f['file'].lower()])
+    if test_files == 0:
+        recommendations.append("Add test functions to improve code reliability")
+    
+    # Performance recommendations
+    if patterns.get('list_comprehensions', 0) == 0 and patterns.get('functions', 0) > 5:
+        recommendations.append("Consider using list comprehensions for better performance")
+    
+    for i, rec in enumerate(recommendations, 1):
+        print(f"{i}. {rec}")
+    
+    if not recommendations:
+        print("1. Code structure appears well-organized")
+        print("2. Continue current development patterns")
+        print("3. Consider adding performance benchmarks")
+
+except Exception as e:
+    print("1. Analyze current code structure")
+    print("2. Add documentation where needed") 
+    print("3. Implement error handling patterns")
+RECOMMENDATIONS_EOF
+          
+      - name: Upload Learning Analysis
+        uses: actions/upload-artifact@v3
+        with:
+          name: repository-learning-analysis
+          path: |
+            learning-report.md
+            repository-learning-data.json
+            
+      - name: Comment Learning Insights
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            
+            try {
+              const report = fs.readFileSync('learning-report.md', 'utf8');
+              const learningData = JSON.parse(fs.readFileSync('repository-learning-data.json', 'utf8'));
+              
+              const summary = `## 🧠 Repository Learning Analysis
+              
+**Patterns Detected:** ${Object.keys(learningData.patterns).length}
+**Functions Analyzed:** ${learningData.functions.length}
+**Classes Found:** ${learningData.classes.length}
+**Import Dependencies:** ${Object.keys(learningData.imports).length}
+
+<details>
+<summary>Full Analysis Report</summary>
+
+${report}
+
+</details>`;
+              
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: summary
+              });
+            } catch (error) {
+              console.log('Error posting learning analysis:', error);
+            }
+            
+      - name: Store Learning Patterns
+        run: |
+          # Create learning patterns directory
+          mkdir -p .echo-learning
+          
+          # Save extracted patterns for future AGI learning
+          echo "Learning patterns extracted and stored for AGI training" > .echo-learning/learning-session-$(date +%Y%m%d-%H%M%S).log
+          
+          # Copy learning data to permanent storage
+          cp repository-learning-data.json .echo-learning/ || true
+          cp learning-report.md .echo-learning/ || true
+          
+          echo "Repository learning analysis completed successfully"
