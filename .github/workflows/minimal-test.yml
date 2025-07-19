@@ -1,0 +1,35 @@
+name: Minimal Test - Upload Artifact v4
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'test_methodology.py'
+      - 'MINIMAL_TEST_TRIGGER.md'
+
+jobs:
+  test-upload-artifact:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        
+      - name: Create test file
+        run: |
+          echo "AGI Test File - Upload Artifact v4 Test" > test-file.txt
+          echo "Created: $(date)" >> test-file.txt
+          echo "Purpose: Verify actions/upload-artifact@v4 works correctly" >> test-file.txt
+          
+      - name: Test Upload Artifact v4
+        uses: actions/upload-artifact@v4
+        with:
+          name: minimal-test-artifact
+          path: test-file.txt
+          retention-days: 7
+          
+      - name: Test Success Report
+        run: |
+          echo "✅ MINIMAL TEST COMPLETE"
+          echo "If you can see this and download the artifact, v4 works correctly"
+          echo "Ready for Step 2: Incremental APK build test"
