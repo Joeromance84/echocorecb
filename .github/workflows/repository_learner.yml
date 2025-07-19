@@ -256,7 +256,7 @@ except Exception as e:
 RECOMMENDATIONS_EOF
           
       - name: Upload Learning Analysis
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: repository-learning-analysis
           path: |
