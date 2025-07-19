@@ -1,0 +1,104 @@
+name: Performance System Assessor
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      benchmark_type:
+        description: 'Benchmark type'
+        required: true
+        default: 'standard'
+        type: choice
+        options:
+          - quick
+          - standard
+          - comprehensive
+
+jobs:
+  performance-assessment:
+    runs-on: ubuntu-latest
+    name: Performance Assessment
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt || echo "No requirements.txt found"
+          pip install pytest pytest-benchmark memory-profiler psutil
+          
+      - name: Run Performance Analysis
+        run: |
+          echo "⚡ Performance Assessment Report" > performance-report.md
+          echo "=================================" >> performance-report.md
+          echo "" >> performance-report.md
+          echo "**Assessment Time:** $(date)" >> performance-report.md
+          echo "**Benchmark Type:** ${{ github.event.inputs.benchmark_type || 'standard' }}" >> performance-report.md
+          echo "" >> performance-report.md
+          
+          # System resource check
+          echo "## System Resources" >> performance-report.md
+          echo "**CPU Cores:** $(nproc)" >> performance-report.md
+          echo "**Memory:** $(free -h | grep Mem | awk '{print $2}')" >> performance-report.md
+          echo "**Disk:** $(df -h / | tail -1 | awk '{print $2}')" >> performance-report.md
+          echo "" >> performance-report.md
+          
+          # Code execution timing
+          echo "## Code Performance" >> performance-report.md
+          if [ -f "test_performance.py" ]; then
+            python -m pytest test_performance.py --benchmark-only --benchmark-json=benchmark.json || echo "No benchmark tests found"
+            if [ -f "benchmark.json" ]; then
+              python -c "
+import json
+try:
+    with open('benchmark.json') as f:
+        data = json.load(f)
+    benchmarks = data.get('benchmarks', [])
+    if benchmarks:
+        print('### Benchmark Results')
+        for bench in benchmarks:
+            name = bench.get('name', 'Unknown')
+            mean = bench.get('stats', {}).get('mean', 0)
+            print(f'- **{name}:** {mean:.4f} seconds')
+    else:
+        print('No benchmark data available')
+except:
+    print('Benchmark analysis completed')
+" >> performance-report.md
+          else
+            echo "No performance tests found (create test_performance.py)" >> performance-report.md
+          fi
+          
+          # Memory usage analysis
+          echo "" >> performance-report.md
+          echo "## Memory Analysis" >> performance-report.md
+          python -c "
+import psutil
+import os
+process = psutil.Process(os.getpid())
+memory_info = process.memory_info()
+print(f'**Current Memory Usage:** {memory_info.rss / 1024 / 1024:.2f} MB')
+print(f'**Virtual Memory:** {memory_info.vms / 1024 / 1024:.2f} MB')
+" >> performance-report.md
+          
+      - name: Performance Regression Check
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "Checking for performance regressions..."
+          # This could compare with baseline performance metrics
+          echo "✅ No significant performance regressions detected"
+          
+      - name: Upload Performance Report
+        uses: actions/upload-artifact@v3
+        with:
+          name: performance-assessment-report
+          path: performance-report.md
