@@ -25,7 +25,7 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         
       - name: Parse Assessment Command
         id: parse-command
@@ -100,8 +100,8 @@ result = sum(i*i for i in range(100000))
 end = time.time()
 print(f'**Computation Test:** {end-start:.4f} seconds')
 print(f'**Result:** {result}')
-print('✅ Performance test completed')
 " >> assessment-result.md
+          echo "✅ Performance test completed" >> assessment-result.md
           
       - name: Comment Assessment Results
         if: github.event_name == 'issue_comment'
@@ -122,3 +122,4 @@ print('✅ Performance test completed')
         with:
           name: interactive-assessment-results
           path: assessment-result.md
+          
