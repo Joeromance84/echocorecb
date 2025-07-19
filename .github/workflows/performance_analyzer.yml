@@ -98,7 +98,7 @@ print(f'**Virtual Memory:** {memory_info.vms / 1024 / 1024:.2f} MB')
           echo "✅ No significant performance regressions detected"
           
       - name: Upload Performance Report
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: performance-assessment-report
           path: performance-report.md
