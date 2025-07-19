@@ -1,3 +1,4 @@
+# Build trigger
 #!/usr/bin/env python3
 """
 EchoCore AGI Mobile Application
