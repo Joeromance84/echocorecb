@@ -8,11 +8,35 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Setup Python
+      - name: Check out repository code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: 3.9
-      - name: Build
-        run: echo Building APK...
+          python-version: '3.9'
+
+      - name: Install Buildozer and dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git zip unzip openjdk-17-jdk python3-pip autoconf build-essential libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cython3
+          pip3 install --upgrade pip
+          pip3 install buildozer
+
+      - name: Build and package the APK
+        run: buildozer android debug
+
+      - name: Upload APK as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EchoCore-APK
+          path: bin/EchoCore-*.apk
+
+What was wrong with the previous workflow:
+ * Missing Buildozer: The workflow didn't install the buildozer tool needed to package the app.
+ * Missing Dependencies: The openjdk, cython, and other dependencies required by buildozer were not being installed.
+ * Missing Build Command: The run command was just a placeholder. The new version runs buildozer android debug to actually perform the build.
+ * Missing Artifact Upload: The final, crucial step to save the APK for download was not included. The new workflow adds a dedicated upload-artifact step.
+ 
