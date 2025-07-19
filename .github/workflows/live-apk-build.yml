@@ -11,21 +11,11 @@ on:
         description: 'Build type'
         required: true
         default: 'live_demo'
-        type: choice
-        options:
-          - live_demo
-          - release
-          - debug
-      debug_mode:
-        description: 'Enable debug output'
-        required: false
-        default: 'true'
-        type: boolean
 
 jobs:
   build-apk:
     runs-on: ubuntu-latest
-    name: Live APK Packaging
+    name: Live APK Packaging with Artifacts
     
     steps:
       - name: Checkout repository
@@ -45,78 +35,41 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v2
         
-      - name: Install build dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git zip unzip openjdk-17-jdk python3-pip
-          sudo apt-get install -y build-essential git python3 python3-dev
-          sudo apt-get install -y libffi-dev libssl-dev
-          
-      - name: Install Python dependencies
-        run: |
+          sudo apt-get install -y git zip unzip openjdk-17-jdk python3-pip build-essential
           python -m pip install --upgrade pip
-          pip install buildozer cython
-          pip install kivy kivymd plyer
-          pip install requests pygithub openai google-genai
+          pip install buildozer cython kivy kivymd plyer requests
           
       - name: Create main.py if missing
         run: |
           if [ ! -f main.py ]; then
-            echo "Creating main.py for EchoCoreCB..."
-            cat > main.py << 'MAIN_EOF'
+            cat > main.py << 'EOF'
           from kivy.app import App
           from kivy.uix.boxlayout import BoxLayout
           from kivy.uix.label import Label
           from kivy.uix.button import Button
           from kivy.uix.textinput import TextInput
-          import os
           
           class EchoCoreApp(App):
               def build(self):
                   layout = BoxLayout(orientation='vertical', padding=20, spacing=10)
                   
-                  # Title
-                  title = Label(
-                      text='EchoCoreCB - AGI Mobile Interface',
-                      font_size='20sp',
-                      size_hint_y=None,
-                      height=50
-                  )
+                  title = Label(text='EchoCoreCB - AGI Mobile Interface', font_size='20sp', size_hint_y=None, height=50)
                   layout.add_widget(title)
                   
-                  # Status
-                  self.status_label = Label(
-                      text='EchoNexus AGI System Ready',
-                      font_size='16sp',
-                      size_hint_y=None,
-                      height=40
-                  )
+                  self.status_label = Label(text='EchoNexus AGI System Ready', font_size='16sp', size_hint_y=None, height=40)
                   layout.add_widget(self.status_label)
                   
-                  # Command input
-                  self.command_input = TextInput(
-                      hint_text='Enter AGI command...',
-                      multiline=False,
-                      size_hint_y=None,
-                      height=40
-                  )
+                  self.command_input = TextInput(hint_text='Enter AGI command...', multiline=False, size_hint_y=None, height=40)
                   layout.add_widget(self.command_input)
                   
-                  # Execute button
-                  execute_btn = Button(
-                      text='Execute AGI Command',
-                      size_hint_y=None,
-                      height=50
-                  )
+                  execute_btn = Button(text='Execute AGI Command', size_hint_y=None, height=50)
                   execute_btn.bind(on_press=self.execute_command)
                   layout.add_widget(execute_btn)
                   
-                  # Output area
-                  self.output_label = Label(
-                      text='AGI output will appear here...',
-                      text_size=(None, None),
-                      valign='top'
-                  )
+                  self.output_label = Label(text='AGI output will appear here...', text_size=(None, None), valign='top')
                   layout.add_widget(self.output_label)
                   
                   return layout
@@ -125,67 +78,97 @@ jobs:
                   command = self.command_input.text
                   if command:
                       self.status_label.text = f'Processing: {command}'
-                      # Simulate AGI processing
                       result = f'AGI processed: "{command}"\nStatus: Active\nCapabilities: Repository analysis, workflow management'
                       self.output_label.text = result
                       self.command_input.text = ''
-                  
+          
           if __name__ == '__main__':
               EchoCoreApp().run()
-          MAIN_EOF
+          EOF
           fi
           
       - name: Initialize buildozer
-        run: |
-          buildozer init || true
+        run: buildozer init || true
           
       - name: Build APK
         run: |
-          echo "🚀 Starting live APK build for EchoCoreCB..."
-          echo "Build type: ${{ github.event.inputs.build_type || 'live_demo' }}"
-          echo "Debug mode: ${{ github.event.inputs.debug_mode || 'true' }}"
-          
-          # Build with progress monitoring
+          echo "🚀 Building EchoCoreCB APK..."
           buildozer android debug --verbose
           
-      - name: Verify APK generation
+      - name: Verify and prepare APK for upload
         run: |
           echo "🔍 Verifying APK generation..."
           if [ -f bin/*.apk ]; then
             echo "✅ APK generated successfully!"
-            ls -la bin/*.apk
             
-            # Get APK info
+            # Find the APK file
             APK_FILE=$(find bin -name "*.apk" | head -1)
             APK_SIZE=$(du -h "$APK_FILE" | cut -f1)
-            echo "📱 APK Size: $APK_SIZE"
-            echo "📂 APK Location: $APK_FILE"
             
-            # Rename for clarity
-            cp "$APK_FILE" "EchoCoreCB-live-build.apk"
+            echo "📱 APK Details:"
+            echo "  File: $APK_FILE"
+            echo "  Size: $APK_SIZE"
+            
+            # Create a clearly named APK for download
+            cp "$APK_FILE" "EchoCoreCB-Mobile-AGI.apk"
+            
+            echo "📦 APK prepared for artifact upload:"
+            ls -la EchoCoreCB-Mobile-AGI.apk
+            ls -la bin/*.apk
+            
+            echo "artifact_ready=true" >> $GITHUB_ENV
+            
           else
-            echo "❌ APK generation failed"
+            echo "❌ APK generation failed - no APK file found"
             echo "Build directory contents:"
-            ls -la bin/ || echo "No bin directory found"
+            ls -la bin/ 2>/dev/null || echo "No bin directory"
+            ls -la . | head -20
+            echo "artifact_ready=false" >> $GITHUB_ENV
             exit 1
           fi
           
-      - name: Upload APK artifact
+      - name: Upload APK Artifacts
         uses: actions/upload-artifact@v3
+        if: env.artifact_ready == 'true'
         with:
-          name: EchoCoreCB-Live-APK
+          name: EchoCoreCB-Mobile-AGI-APK
           path: |
-            EchoCoreCB-live-build.apk
+            EchoCoreCB-Mobile-AGI.apk
             bin/*.apk
-            
-      - name: Live build summary
+          retention-days: 30
+          
+      - name: Build completion summary
+        if: always()
         run: |
-          echo "🎉 LIVE APK BUILD COMPLETED!"
-          echo "================================"
+          echo "🎉 ECHOCORE AGI APK BUILD PROCESS COMPLETED"
+          echo "============================================"
           echo "Repository: ${{ github.repository }}"
-          echo "Build triggered: $(date)"
-          echo "Build type: ${{ github.event.inputs.build_type || 'live_demo' }}"
-          echo "Workflow run: ${{ github.run_id }}"
-          echo "APK generated: ✅"
-          echo "================================"
-          echo "AGI Learning: This build process was observed for pattern recognition"
+          echo "Workflow Run ID: ${{ github.run_id }}"
+          echo "Build URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo "Timestamp: $(date)"
+          echo "Build Type: ${{ github.event.inputs.build_type || 'push_trigger' }}"
+          
+          if [ "${{ env.artifact_ready }}" = "true" ]; then
+            echo ""
+            echo "✅ APK BUILD SUCCESSFUL"
+            echo "✅ ARTIFACTS UPLOADED"
+            echo ""
+            echo "📱 TO DOWNLOAD YOUR APK:"
+            echo "1. Go to: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo "2. Scroll down to find the 'Artifacts' section"
+            echo "3. Click on 'EchoCoreCB-Mobile-AGI-APK' to download"
+            echo "4. Extract the downloaded ZIP file"
+            echo "5. Install 'EchoCoreCB-Mobile-AGI.apk' on your Android device"
+            echo ""
+            echo "🤖 The APK contains your complete EchoNexus AGI mobile interface!"
+            
+          else
+            echo ""
+            echo "❌ APK BUILD FAILED"
+            echo "❌ NO ARTIFACTS TO DOWNLOAD"
+            echo ""
+            echo "Check the build logs above for error details."
+          fi
+          
+          echo "============================================"
+          echo "🧠 AGI Learning: Build process observed for optimization"
