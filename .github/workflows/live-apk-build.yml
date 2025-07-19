@@ -1,4 +1,4 @@
-name: Live APK Build - EchoCoreCB
+name: Live APK Build - EchoCoreCB (AGI Failure Fix)
 
 on:
   push:
@@ -8,6 +8,7 @@ on:
 jobs:
   build-apk:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     
     steps:
       - name: Checkout repository
@@ -27,11 +28,12 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v2
         
-      - name: Install dependencies
+      - name: Install dependencies with retry
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential git python3-pip
-          pip install buildozer cython kivy
+          pip install --upgrade pip
+          pip install --timeout 300 buildozer cython kivy || pip install --timeout 300 buildozer cython kivy
           
       - name: Create main.py
         run: |
@@ -41,18 +43,19 @@ jobs:
           
           class EchoCoreApp(App):
               def build(self):
-                  return Label(text='EchoCoreCB - AGI Mobile Interface Ready')
+                  return Label(text='EchoCoreCB - AGI Fixed Build')
           
           EchoCoreApp().run()
           EOF
           
-      - name: Build APK
+      - name: Build APK with error handling
         run: |
           buildozer init || true
-          buildozer android debug
+          buildozer android debug || (echo "First build failed, retrying..." && buildozer android debug)
           
-      - name: Upload APK
+      - name: Upload APK Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: EchoCoreCB-Mobile-AGI
+          name: EchoCoreCB-Mobile-AGI-Fixed
           path: bin/*.apk
+          retention-days: 30
