@@ -27,15 +27,15 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-        
+              
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v2
         with:
           languages: python
-          
+                
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v2
-        
+              
       - name: Run Security Audit
         run: |
           echo "🔒 Security Assessment Report" > security-report.md
@@ -45,50 +45,66 @@ jobs:
           echo "**Trigger:** ${{ github.event_name }}" >> security-report.md
           echo "**Level:** ${{ github.event.inputs.assessment_level || 'standard' }}" >> security-report.md
           echo "" >> security-report.md
-          
+                    
           # Dependency vulnerability check
           if [ -f "requirements.txt" ]; then
             echo "## Python Dependencies" >> security-report.md
             pip install safety
+            # Run safety and redirect output to safety-report.json
+            # The '|| true' prevents the step from failing if safety finds vulnerabilities
             safety check -r requirements.txt --json > safety-report.json || true
-            python -c "
+            
+            # Use heredoc for the Python script that parses safety-report.json
+            python3 <<EOF_PYTHON_SCRIPT >> security-report.md
 import json
 try:
     with open('safety-report.json') as f:
         data = json.load(f)
     if data:
-        print('⚠️ Found vulnerabilities in dependencies')
+        print('⚠️ Found vulnerabilities in dependencies:')
         for vuln in data:
-            print(f'- {vuln.get("package", "unknown")}: {vuln.get("advisory", "No details")}')
+            # Safety's JSON output structure might vary slightly,
+            # so we'll try to extract common fields.
+            # Example: [{"package": "...", "advisory": "...", "vulnerable_version": "..."}]
+            package_name = vuln.get("package", "unknown")
+            advisory_text = vuln.get("advisory", "No details provided.")
+            print(f'- Package: {package_name}, Advisory: {advisory_text}')
     else:
-        print('✅ No known vulnerabilities found')
-except:
-    print('✅ Dependencies appear secure')
-" >> security-report.md
+        print('✅ No known vulnerabilities found in dependencies.')
+except Exception as e:
+    print(f'✅ Dependencies appear secure (Error parsing report: {e})')
+EOF_PYTHON_SCRIPT
           fi
-          
+                    
           # File permissions audit
           echo "" >> security-report.md
           echo "## File Security" >> security-report.md
+          echo "### Executable Python Files (first 10)" >> security-report.md
+          # Find executable Python files and list them
           find . -type f -perm /u+x -name "*.py" | head -10 | while read file; do
-            echo "- Executable Python file: $file" >> security-report.md
+            echo "- $file" >> security-report.md
           done
-          
-          # Environment variable security
-          echo "" >> security-report.md
-          echo "## Environment Security" >> security-report.md
-          if grep -r "password\|secret\|key" . --include="*.py" --include="*.yml" | head -5; then
-            echo "⚠️ Potential secrets found in code" >> security-report.md
-          else
-            echo "✅ No obvious secrets in source code" >> security-report.md
+          if ! find . -type f -perm /u+x -name "*.py" | read -r; then
+            echo "✅ No executable Python files found." >> security-report.md
           fi
           
+          # Environment variable security (basic check for secrets in files)
+          echo "" >> security-report.md
+          echo "## Potential Secrets in Code" >> security-report.md
+          # Use grep to find common secret keywords in Python/YAML files
+          if grep -r -i "password\|secret\|key\|token\|api_key" . --include="*.py" --include="*.yml" --exclude-dir=".git" --exclude-dir=".buildozer" | head -5; then
+            echo "⚠️ Potential secrets found in source code (first 5 matches shown above)." >> security-report.md
+            echo "Review these lines carefully. False positives are possible." >> security-report.md
+          else
+            echo "✅ No obvious secrets found in source code." >> security-report.md
+          fi
+                
       - name: Upload Security Report
         uses: actions/upload-artifact@v4
         with:
           name: security-assessment-report
           path: security-report.md
-          
+                
       - name: Comment Security Assessment
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v6
