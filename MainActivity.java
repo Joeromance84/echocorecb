@@ -4,11 +4,11 @@ package com.echocore.agi;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.Html; // For basic HTML markup like <b>
 import android.text.method.ScrollingMovementMethod;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
-import android.widget.LinearLayout;
 import android.widget.TextView;
 import androidx.appcompat.app.AppCompatActivity;
 import java.util.concurrent.ExecutorService;
@@ -18,7 +18,7 @@ public class MainActivity extends AppCompatActivity {
 
     private TextView statusLabel;
     private EditText textInput;
-    private EchoAGICore agiCore;
+    private EchoAGICore agiCore; // Now a Java class
     private ExecutorService executorService;
     private Handler mainHandler;
 
@@ -74,7 +74,8 @@ public class MainActivity extends AppCompatActivity {
         // Ensure UI updates happen on the main thread
         mainHandler.post(() -> {
             String currentText = statusLabel.getText().toString();
-            statusLabel.setText(currentText + "\n" + message);
+            // Use Html.fromHtml for basic HTML tags like <b>
+            statusLabel.setText(Html.fromHtml(currentText + "<br>" + message, Html.FROM_HTML_MODE_COMPACT));
         });
     }
 
@@ -84,7 +85,7 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        updateStatus("\n<b>> " + command + "</b>"); // Kivy's markup is not directly supported, using HTML bold
+        updateStatus("<b>> " + command + "</b>"); // Using HTML bold for command input
 
         // Execute command in background thread
         executorService.execute(() -> processAgiCommand(command));
@@ -119,9 +120,9 @@ public class MainActivity extends AppCompatActivity {
     private void showAgiStatus() {
         if (agiCore != null) {
             String status = agiCore.getStatus();
-            updateStatus("\n📊 AGI Status:\n" + status);
+            updateStatus("<b>📊 AGI Status:</b><br>" + status); // Using HTML bold for status title
         } else {
-            updateStatus("\n📊 AGI Status: Core not initialized");
+            updateStatus("<b>📊 AGI Status:</b> Core not initialized");
         }
     }
 
@@ -144,7 +145,7 @@ public class MainActivity extends AppCompatActivity {
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:padding="16dp"
-    android:spacing="10dp"
+    android:background="#FFFFFF"
     tools:context=".MainActivity">
 
     <!-- Title -->
@@ -153,30 +154,36 @@ public class MainActivity extends AppCompatActivity {
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="EchoCore AGI Mobile\nAutonomous Development Platform"
-        android:textSize="20sp"
+        android:textSize="24sp"
         android:textStyle="bold"
+        android:textColor="#3F51B5"
         android:gravity="center"
-        android:layout_marginBottom="10dp" />
+        android:layout_marginBottom="16dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp" />
 
     <!-- Status Display -->
     <ScrollView
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:background="#f0f0f0"
-        android:padding="8dp"
-        android:layout_marginBottom="10dp">
+        android:background="#E8EAF6"
+        android:padding="12dp"
+        android:layout_marginBottom="16dp"
+        android:elevation="2dp"
+        android:clipToPadding="false"
+        android:clipChildren="false">
         <TextView
             android:id="@+id/status_label"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="EchoCore AGI: Initializing autonomous intelligence...\n"
             android:textSize="14sp"
-            android:textColor="#333333"
+            android:textColor="#212121"
             android:fontFamily="monospace"
             android:scrollbars="vertical"
             android:gravity="top"
-            android:lineSpacingExtra="2dp" />
+            android:lineSpacingExtra="4dp" />
     </ScrollView>
 
     <!-- Input Area -->
@@ -184,52 +191,78 @@ public class MainActivity extends AppCompatActivity {
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:layout_marginTop="10dp">
+        android:layout_marginTop="8dp">
 
         <EditText
             android:id="@+id/text_input"
             android:layout_width="0dp"
-            android:layout_height="match_parent"
+            android:layout_height="wrap_content"
             android:layout_weight="0.7"
-            android:hint="Enter AGI commands: 'create repository', 'analyze code', 'optimize costs'..."
+            android:hint="Enter AGI commands..."
             android:inputType="textMultiLine"
+            android:minLines="3"
+            android:maxLines="5"
             android:gravity="top"
-            android:padding="8dp"
-            android:background="@android:drawable/editbox_background" />
+            android:padding="12dp"
+            android:background="@drawable/edittext_background"
+            android:textColor="#212121"
+            android:textColorHint="#757575"
+            android:textSize="16sp" />
 
         <!-- Button Layout -->
         <LinearLayout
             android:layout_width="0dp"
-            android:layout_height="match_parent"
+            android:layout_height="wrap_content"
             android:layout_weight="0.3"
             android:orientation="vertical"
-            android:layout_marginStart="10dp">
+            android:layout_marginStart="16dp">
 
             <Button
                 android:id="@+id/execute_button"
                 android:layout_width="match_parent"
-                android:layout_height="0dp"
-                android:layout_weight="0.4"
+                android:layout_height="wrap_content"
                 android:text="Execute AGI"
-                android:layout_marginBottom="5dp" />
+                android:backgroundTint="#4CAF50"
+                android:textColor="#FFFFFF"
+                android:padding="12dp"
+                android:layout_marginBottom="8dp"
+                android:textSize="14sp"
+                android:textStyle="bold" />
 
             <Button
                 android:id="@+id/status_button"
                 android:layout_width="match_parent"
-                android:layout_height="0dp"
-                android:layout_weight="0.3"
+                android:layout_height="wrap_content"
                 android:text="AGI Status"
-                android:layout_marginBottom="5dp" />
+                android:backgroundTint="#2196F3"
+                android:textColor="#FFFFFF"
+                android:padding="12dp"
+                android:layout_marginBottom="8dp"
+                android:textSize="14sp"
+                android:textStyle="bold" />
 
             <Button
                 android:id="@+id/clear_button"
                 android:layout_width="match_parent"
-                android:layout_height="0dp"
-                android:layout_weight="0.3"
-                android:text="Clear" />
+                android:layout_height="wrap_content"
+                android:text="Clear"
+                android:backgroundTint="#F44336"
+                android:textColor="#FFFFFF"
+                android:padding="12dp"
+                android:textSize="14sp"
+                android:textStyle="bold" />
         </LinearLayout>
     </LinearLayout>
 </LinearLayout>
+```xml
+<!-- EchoCoreAGI/app/src/main/res/drawable/edittext_background.xml -->
+<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="#FFFFFF" />
+    <stroke android:width="1dp" android:color="#BBDEFB" />
+    <corners android:radius="8dp" />
+    <padding android:left="8dp" android:top="8dp" android:right="8dp" android:bottom="8dp" />
+</shape>
 ```java
 // EchoCoreAGI/app/src/main/java/com/echocore/agi/IntelligentAIRouter.java
 package com.echocore.agi;
@@ -280,6 +313,7 @@ public class IntelligentAIRouter {
             this.usageStats.put("google", this.usageStats.get("google") + 1);
             return "google";
         } else {
+            this.providers.get("openai").put("available", true); // Ensure OpenAI is available if Google is not
             this.usageStats.put("openai", this.usageStats.get("openai") + 1);
             return "openai";
         }
@@ -297,7 +331,7 @@ public class IntelligentAIRouter {
         
         String optimizationRate;
         if (totalRequests > 0) {
-            optimizationRate = String.format("%.1f%%", ((double) googleRequests / totalRequests) * 100);
+            optimizationRate = String.format(Locale.US, "%.1f%%", ((double) googleRequests / totalRequests) * 100);
         } else {
             optimizationRate = "0.0%";
         }
@@ -399,7 +433,8 @@ public class GitHubIntegration {
 ```xml
 <!-- EchoCoreAGI/app/src/main/AndroidManifest.xml -->
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="[http://schemas.android.com/apk/res/android](http://schemas.android.com/apk/res/android)"
+    package="com.echocore.agi"> <!-- Ensure package attribute matches your Java package -->
 
     <application
         android:allowBackup="true"
@@ -487,12 +522,14 @@ buildscript {
         classpath 'com.android.tools.build:gradle:8.2.0' // Use a recent stable Gradle plugin version
         classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.0' // Match Kotlin version if used
     }
+    // Add any other necessary buildscript repositories or dependencies here
 }
 
 allprojects {
     repositories {
         google()
         mavenCentral()
+        // Add any other necessary project repositories here
     }
 }
 
