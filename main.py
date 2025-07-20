@@ -1,169 +1,501 @@
-# Build trigger
-#!/usr/bin/env python3
-"""
-EchoCore AGI Mobile Application
-Complete autonomous AI development platform for Android
-"""
+// EchoCoreAGI/app/src/main/java/com/echocore/agi/MainActivity.java
+package com.echocore.agi;
 
-from kivy.app import App
-from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.label import Label
-from kivy.uix.textinput import TextInput
-from kivy.uix.button import Button
-from kivy.uix.scrollview import ScrollView
-from kivy.clock import Clock
-import threading
-import json
-import os
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.text.method.ScrollingMovementMethod;
+import android.view.View;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+import androidx.appcompat.app.AppCompatActivity;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
-# Import AGI modules
-try:
-    from echo_agi_core import EchoAGICore
-    from intelligent_ai_router import IntelligentAIRouter
-    from cost_optimized_ai_client import CostOptimizedAIClient
-    from github_integration import GitHubIntegration
-except ImportError as e:
-    print(f"AGI modules not available: {e}")
+public class MainActivity extends AppCompatActivity {
 
-class EchoCoreCBApp(App):
-    """Main EchoCore AGI Mobile Application"""
-    
-    def build(self):
-        self.title = "EchoCore AGI"
-        
-        # Initialize AGI core
-        self.agi_core = None
-        try:
-            self.agi_core = EchoAGICore()
-            print("AGI Core initialized successfully")
-        except Exception as e:
-            print(f"AGI Core initialization failed: {e}")
-        
-        # Main layout
-        layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
-        
-        # Title
-        title = Label(
-            text='EchoCore AGI Mobile\nAutonomous Development Platform',
-            size_hint=(1, 0.15),
-            font_size='20sp',
-            bold=True,
-            halign='center'
-        )
-        title.bind(size=title.setter('text_size'))
-        layout.add_widget(title)
-        
-        # Status display
-        self.status_label = Label(
-            text='EchoCore AGI: Initializing autonomous intelligence...\n',
-            text_size=(None, None),
-            valign='top',
-            size_hint=(1, 0.6),
-            markup=True
-        )
-        
-        scroll = ScrollView()
-        scroll.add_widget(self.status_label)
-        layout.add_widget(scroll)
-        
-        # Input area
-        input_layout = BoxLayout(size_hint=(1, 0.25), spacing=10)
-        
-        self.text_input = TextInput(
-            hint_text='Enter AGI commands: "create repository", "analyze code", "optimize costs"...',
-            multiline=True,
-            size_hint=(0.7, 1)
-        )
-        input_layout.add_widget(self.text_input)
-        
-        # Button layout
-        button_layout = BoxLayout(orientation='vertical', size_hint=(0.3, 1), spacing=5)
-        
-        execute_button = Button(text='Execute AGI', size_hint=(1, 0.4))
-        execute_button.bind(on_press=self.execute_agi_command)
-        button_layout.add_widget(execute_button)
-        
-        status_button = Button(text='AGI Status', size_hint=(1, 0.3))
-        status_button.bind(on_press=self.show_agi_status)
-        button_layout.add_widget(status_button)
-        
-        clear_button = Button(text='Clear', size_hint=(1, 0.3))
-        clear_button.bind(on_press=self.clear_output)
-        button_layout.add_widget(clear_button)
-        
-        input_layout.add_widget(button_layout)
-        layout.add_widget(input_layout)
-        
-        # Start AGI initialization in background
-        threading.Thread(target=self.initialize_agi_systems, daemon=True).start()
-        
-        return layout
-    
-    def initialize_agi_systems(self):
-        """Initialize AGI systems in background"""
-        Clock.schedule_once(lambda dt: self.update_status("Initializing AGI systems..."), 0)
-        
-        if self.agi_core:
-            try:
-                self.agi_core.initialize()
-                Clock.schedule_once(lambda dt: self.update_status("✅ AGI Core initialized"), 1)
-                Clock.schedule_once(lambda dt: self.update_status("✅ Intelligent AI routing active"), 2)
-                Clock.schedule_once(lambda dt: self.update_status("✅ Cost optimization enabled"), 3)
-                Clock.schedule_once(lambda dt: self.update_status("✅ GitHub integration ready"), 4)
-                Clock.schedule_once(lambda dt: self.update_status("🚀 EchoCore AGI fully operational!"), 5)
-            except Exception as e:
-                Clock.schedule_once(lambda dt: self.update_status(f"❌ AGI initialization error: {e}"), 1)
-    
-    def update_status(self, message):
-        """Update status display"""
-        current_text = self.status_label.text
-        self.status_label.text = f"{current_text}\n{message}"
-        self.status_label.text_size = (self.status_label.parent.width - 20, None)
-    
-    def execute_agi_command(self, instance):
-        """Execute AGI command"""
-        command = self.text_input.text.strip()
-        if not command:
-            return
-        
-        self.update_status(f"\n[b]> {command}[/b]")
-        
-        # Execute in background thread
-        threading.Thread(target=self.process_agi_command, args=(command,), daemon=True).start()
-        
-        # Clear input
-        self.text_input.text = ''
-    
-    def process_agi_command(self, command):
-        """Process AGI command in background"""
-        try:
-            if self.agi_core:
-                result = self.agi_core.process_command(command)
-                Clock.schedule_once(lambda dt: self.update_status(f"🤖 {result}"), 0)
-            else:
-                # Fallback processing
-                if "repository" in command.lower():
-                    Clock.schedule_once(lambda dt: self.update_status("🔧 Repository operations ready"), 0)
-                elif "analyze" in command.lower():
-                    Clock.schedule_once(lambda dt: self.update_status("📊 Code analysis capabilities active"), 0)
-                elif "optimize" in command.lower():
-                    Clock.schedule_once(lambda dt: self.update_status("⚡ Cost optimization algorithms running"), 0)
-                else:
-                    Clock.schedule_once(lambda dt: self.update_status(f"🤖 Processing: {command}"), 0)
-        except Exception as e:
-            Clock.schedule_once(lambda dt: self.update_status(f"❌ Error: {e}"), 0)
-    
-    def show_agi_status(self, instance):
-        """Show AGI system status"""
-        if self.agi_core:
-            status = self.agi_core.get_status()
-            self.update_status(f"\n📊 AGI Status:\n{status}")
-        else:
-            self.update_status("\n📊 AGI Status: Core not initialized")
-    
-    def clear_output(self, instance):
-        """Clear output display"""
-        self.status_label.text = 'EchoCore AGI: Ready for commands...\n'
+    private TextView statusLabel;
+    private EditText textInput;
+    private EchoAGICore agiCore;
+    private ExecutorService executorService;
+    private Handler mainHandler;
 
-if __name__ == '__main__':
-    EchoCoreCBApp().run()
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main); // Links to activity_main.xml
+
+        // Initialize UI components
+        statusLabel = findViewById(R.id.status_label);
+        textInput = findViewById(R.id.text_input);
+        Button executeButton = findViewById(R.id.execute_button);
+        Button statusButton = findViewById(R.id.status_button);
+        Button clearButton = findViewById(R.id.clear_button);
+
+        // Make statusLabel scrollable
+        statusLabel.setMovementMethod(new ScrollingMovementMethod());
+
+        // Initialize background executor and UI handler
+        executorService = Executors.newSingleThreadExecutor();
+        mainHandler = new Handler(Looper.getMainLooper());
+
+        // Set button click listeners
+        executeButton.setOnClickListener(v -> executeAgiCommand());
+        statusButton.setOnClickListener(v -> showAgiStatus());
+        clearButton.setOnClickListener(v -> clearOutput());
+
+        // Start AGI initialization in background
+        executorService.execute(this::initializeAgiSystems);
+    }
+
+    private void initializeAgiSystems() {
+        updateStatus("Initializing AGI systems...");
+
+        try {
+            agiCore = new EchoAGICore();
+            agiCore.initialize(); // Call the actual initialization logic
+
+            updateStatus("✅ AGI Core initialized");
+            // Simulate delays for sequential updates, similar to Kivy's Clock.schedule_once
+            mainHandler.postDelayed(() -> updateStatus("✅ Intelligent AI routing active"), 1000);
+            mainHandler.postDelayed(() -> updateStatus("✅ Cost optimization enabled"), 2000);
+            mainHandler.postDelayed(() -> updateStatus("✅ GitHub integration ready"), 3000);
+            mainHandler.postDelayed(() -> updateStatus("🚀 EchoCore AGI fully operational!"), 4000);
+
+        } catch (Exception e) {
+            updateStatus("❌ AGI initialization error: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    private void updateStatus(String message) {
+        // Ensure UI updates happen on the main thread
+        mainHandler.post(() -> {
+            String currentText = statusLabel.getText().toString();
+            statusLabel.setText(currentText + "\n" + message);
+        });
+    }
+
+    private void executeAgiCommand() {
+        String command = textInput.getText().toString().trim();
+        if (command.isEmpty()) {
+            return;
+        }
+
+        updateStatus("\n<b>> " + command + "</b>"); // Kivy's markup is not directly supported, using HTML bold
+
+        // Execute command in background thread
+        executorService.execute(() -> processAgiCommand(command));
+
+        // Clear input on main thread
+        mainHandler.post(() -> textInput.setText(""));
+    }
+
+    private void processAgiCommand(String command) {
+        try {
+            if (agiCore != null) {
+                String result = agiCore.processCommand(command);
+                updateStatus("🤖 " + result);
+            } else {
+                // Fallback processing if AGI core failed to initialize
+                if (command.toLowerCase().contains("repository")) {
+                    updateStatus("🔧 Repository operations ready (fallback)");
+                } else if (command.toLowerCase().contains("analyze")) {
+                    updateStatus("📊 Code analysis capabilities active (fallback)");
+                } else if (command.toLowerCase().contains("optimize")) {
+                    updateStatus("⚡ Cost optimization algorithms running (fallback)");
+                } else {
+                    updateStatus("🤖 Processing: " + command + " (fallback)");
+                }
+            }
+        } catch (Exception e) {
+            updateStatus("❌ Error: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    private void showAgiStatus() {
+        if (agiCore != null) {
+            String status = agiCore.getStatus();
+            updateStatus("\n📊 AGI Status:\n" + status);
+        } else {
+            updateStatus("\n📊 AGI Status: Core not initialized");
+        }
+    }
+
+    private void clearOutput() {
+        mainHandler.post(() -> statusLabel.setText("EchoCore AGI: Ready for commands...\n"));
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        executorService.shutdown(); // Shut down the executor when the activity is destroyed
+    }
+}
+```xml
+<!-- EchoCoreAGI/app/src/main/res/layout/activity_main.xml -->
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="[http://schemas.android.com/apk/res/android](http://schemas.android.com/apk/res/android)"
+    xmlns:tools="[http://schemas.android.com/tools](http://schemas.android.com/tools)"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp"
+    android:spacing="10dp"
+    tools:context=".MainActivity">
+
+    <!-- Title -->
+    <TextView
+        android:id="@+id/title_label"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="EchoCore AGI Mobile\nAutonomous Development Platform"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:gravity="center"
+        android:layout_marginBottom="10dp" />
+
+    <!-- Status Display -->
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="#f0f0f0"
+        android:padding="8dp"
+        android:layout_marginBottom="10dp">
+        <TextView
+            android:id="@+id/status_label"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="EchoCore AGI: Initializing autonomous intelligence...\n"
+            android:textSize="14sp"
+            android:textColor="#333333"
+            android:fontFamily="monospace"
+            android:scrollbars="vertical"
+            android:gravity="top"
+            android:lineSpacingExtra="2dp" />
+    </ScrollView>
+
+    <!-- Input Area -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="10dp">
+
+        <EditText
+            android:id="@+id/text_input"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="0.7"
+            android:hint="Enter AGI commands: 'create repository', 'analyze code', 'optimize costs'..."
+            android:inputType="textMultiLine"
+            android:gravity="top"
+            android:padding="8dp"
+            android:background="@android:drawable/editbox_background" />
+
+        <!-- Button Layout -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="0.3"
+            android:orientation="vertical"
+            android:layout_marginStart="10dp">
+
+            <Button
+                android:id="@+id/execute_button"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="0.4"
+                android:text="Execute AGI"
+                android:layout_marginBottom="5dp" />
+
+            <Button
+                android:id="@+id/status_button"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="0.3"
+                android:text="AGI Status"
+                android:layout_marginBottom="5dp" />
+
+            <Button
+                android:id="@+id/clear_button"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="0.3"
+                android:text="Clear" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>
+```java
+// EchoCoreAGI/app/src/main/java/com/echocore/agi/IntelligentAIRouter.java
+package com.echocore.agi;
+
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * Intelligent AI Router - Cost-Optimized AI Service Selection.
+ * Routes AI requests to the most cost-effective provider.
+ */
+public class IntelligentAIRouter {
+
+    private Map<String, Map<String, Object>> providers;
+    private Map<String, Integer> usageStats;
+
+    public IntelligentAIRouter() {
+        this.providers = new HashMap<>();
+        
+        Map<String, Object> googleDetails = new HashMap<>();
+        googleDetails.put("cost", 0.0);
+        googleDetails.put("available", true);
+        googleDetails.put("priority", 1);
+        this.providers.put("google", googleDetails);
+
+        Map<String, Object> openaiDetails = new HashMap<>();
+        openaiDetails.put("cost", 0.002);
+        openaiDetails.put("available", true);
+        openaiDetails.put("priority", 2);
+        this.providers.put("openai", openaiDetails);
+
+        this.usageStats = new HashMap<>();
+        this.usageStats.put("google", 0);
+        this.usageStats.put("openai", 0);
+    }
+
+    /**
+     * Routes a request to the optimal provider based on cost.
+     *
+     * @param requestType The type of request (e.g., "text"). Not currently used in logic but kept for future expansion.
+     * @return The name of the selected provider.
+     */
+    public String routeRequest(String requestType) {
+        // Ensure type safety for 'available' property
+        Boolean googleAvailable = (Boolean) this.providers.get("google").get("available");
+
+        if (googleAvailable != null && googleAvailable) {
+            this.usageStats.put("google", this.usageStats.get("google") + 1);
+            return "google";
+        } else {
+            this.usageStats.put("openai", this.usageStats.get("openai") + 1);
+            return "openai";
+        }
+    }
+
+    /**
+     * Calculates the cost savings from using the intelligent routing.
+     *
+     * @return A map containing cost savings metrics.
+     */
+    public Map<String, Object> getCostSavings() {
+        int googleRequests = this.usageStats.get("google");
+        double savings = googleRequests * 0.002;
+        int totalRequests = this.usageStats.get("google") + this.usageStats.get("openai");
+        
+        String optimizationRate;
+        if (totalRequests > 0) {
+            optimizationRate = String.format("%.1f%%", ((double) googleRequests / totalRequests) * 100);
+        } else {
+            optimizationRate = "0.0%";
+        }
+
+        Map<String, Object> savingsData = new HashMap<>();
+        savingsData.put("total_savings", savings);
+        savingsData.put("free_requests", googleRequests);
+        savingsData.put("optimization_rate", optimizationRate);
+        
+        return savingsData;
+    }
+}
+```java
+// EchoCoreAGI/app/src/main/java/com/echocore/agi/EchoAGICore.java
+package com.echocore.agi;
+
+// This is a stub for the EchoAGICore.
+// You would replace this with your actual AGI core logic.
+public class EchoAGICore {
+    private IntelligentAIRouter router;
+    private CostOptimizedAIClient aiClient;
+    private GitHubIntegration githubIntegration;
+    private boolean initialized = false;
+
+    public EchoAGICore() {
+        // Constructor: Initialize sub-modules
+        this.router = new IntelligentAIRouter();
+        this.aiClient = new CostOptimizedAIClient();
+        this.githubIntegration = new GitHubIntegration();
+    }
+
+    public void initialize() {
+        // Simulate complex initialization
+        try {
+            // In a real scenario, this might involve loading models,
+            // connecting to services, performing self-checks.
+            Thread.sleep(1000); // Simulate work
+            initialized = true;
+            System.out.println("EchoAGICore: Core systems initialized.");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            System.err.println("EchoAGICore: Initialization interrupted.");
+        }
+    }
+
+    public String processCommand(String command) {
+        if (!initialized) {
+            return "Error: AGI Core not initialized. Please wait.";
+        }
+
+        String response = "Command received: " + command + ". Processing...";
+
+        // Example command processing logic
+        if (command.toLowerCase().contains("create repository")) {
+            response = githubIntegration.createRepository("new-agi-repo");
+        } else if (command.toLowerCase().contains("analyze code")) {
+            response = aiClient.analyzeCode("some_code_snippet");
+        } else if (command.toLowerCase().contains("optimize costs")) {
+            response = "Cost optimization initiated. Savings: " + router.getCostSavings().get("total_savings");
+        } else {
+            response = "AGI processed: '" + command + "'. No specific action defined (yet).";
+        }
+        return response;
+    }
+
+    public String getStatus() {
+        StringBuilder status = new StringBuilder();
+        status.append("Core Status: ").append(initialized ? "Operational" : "Initializing").append("\n");
+        status.append("Router Usage: ").append(router.getCostSavings().get("optimization_rate")).append(" optimized\n");
+        status.append("AI Client Ready: ").append(aiClient != null ? "Yes" : "No").append("\n");
+        status.append("GitHub Integration Ready: ").append(githubIntegration != null ? "Yes" : "No");
+        return status.toString();
+    }
+}
+```java
+// EchoCoreAGI/app/src/main/java/com/echocore/agi/CostOptimizedAIClient.java
+package com.echocore.agi;
+
+// This is a stub for the CostOptimizedAIClient.
+// You would replace this with your actual AI client logic.
+public class CostOptimizedAIClient {
+    public String analyzeCode(String code) {
+        // Simulate code analysis
+        return "Code analysis for '" + code.substring(0, Math.min(code.length(), 20)) + "...' complete. No critical issues detected.";
+    }
+}
+```java
+// EchoCoreAGI/app/src/main/java/com/echocore/agi/GitHubIntegration.java
+package com.echocore.agi;
+
+// This is a stub for the GitHubIntegration.
+// You would replace this with your actual GitHub API interaction logic.
+public class GitHubIntegration {
+    public String createRepository(String repoName) {
+        // Simulate repository creation
+        return "Repository '" + repoName + "' created successfully on GitHub (simulated).";
+    }
+}
+```xml
+<!-- EchoCoreAGI/app/src/main/AndroidManifest.xml -->
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.AppCompat.Light.NoActionBar"> <!-- Using a no-actionbar theme for full control -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"> <!-- Lock to portrait for consistent UI -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>
+```xml
+<!-- EchoCoreAGI/app/src/main/res/values/strings.xml -->
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">EchoCore AGI</string>
+</resources>
+```gradle
+// EchoCoreAGI/app/build.gradle (App-level build.gradle)
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android' // Keep if you plan to use Kotlin, otherwise remove
+}
+
+android {
+    namespace 'com.echocore.agi'
+    compileSdk 34 // Target Android 14
+
+    defaultConfig {
+        applicationId "com.echocore.agi"
+        minSdk 21 // Minimum Android 5.0 (Lollipop)
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.12.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
+}
+```gradle
+// EchoCoreAGI/build.gradle (Project-level build.gradle)
+plugins {
+    id 'com.android.application' apply false
+    id 'com.android.library' apply false
+    id 'org.jetbrains.kotlin.android' apply false
+}
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.2.0' // Use a recent stable Gradle plugin version
+        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.0' // Match Kotlin version if used
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+tasks.register('clean', Delete) {
+    delete rootProject.buildDir
+}
