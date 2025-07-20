@@ -10,30 +10,50 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Step 1: Checkout the repository code
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4 # Updated to v4 for latest features and security
 
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
+      # Step 2: Setup Java Development Kit (JDK)
+      # Essential for Android build tools (Gradle, AAPT, etc.)
       - name: Install Java 17
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4 # Updated to v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v2
+      # Step 3: Setup Python environment
+      # Python is needed for Buildozer and your application's logic.
+      - name: Setup Python
+        uses: actions/setup-python@v5 # Updated to v5
+        with:
+          python-version: '3.11'
+          cache: 'pip' # Enable pip caching to speed up dependency installation
 
-      - name: Install dependencies
+      # Step 4: Setup Android SDK
+      # Provides Android build tools, platform tools, and SDK platforms.
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v2 # Current stable version
+
+      # Step 5: Install core system-level build dependencies
+      # This is where we ensure autoconf, automake, and libtool are present.
+      # build-essential provides fundamental build tools like gcc.
+      - name: Install System Build Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential git python3-pip
-          pip install buildozer cython kivy
+          sudo apt-get install -y build-essential git autoconf automake libtool
 
-      - name: Create main.py
+      # Step 6: Install Python-specific dependencies
+      # Buildozer, Cython, and Kivy are installed via pip.
+      - name: Install Python Dependencies
+        run: |
+          pip install buildozer cython kivy python-for-android # Added python-for-android explicitly
+          # If you have a requirements.txt file, uncomment the line below:
+          # pip install -r requirements.txt
+
+      # Step 7: Create a minimal main.py for demonstration/testing
+      # This ensures a basic Kivy app exists for Buildozer to package.
+      - name: Create main.py (for testing)
         run: |
           cat > main.py << 'EOF'
           from kivy.app import App
@@ -46,15 +66,20 @@ jobs:
           EchoCoreApp().run()
           EOF
 
+      # Step 8: Initialize Buildozer project
+      # '|| true' ensures the workflow doesn't fail if .buildozer already exists.
       - name: Initialize Buildozer
         run: buildozer init || true
 
+      # Step 9: Build and package the APK
+      # 'yes |' automatically confirms any prompts from buildozer.
       - name: Build and package the APK
         run: yes | buildozer android debug
 
+      # Step 10: Upload the generated APK artifact
+      # Makes the APK available for download from the GitHub Actions run.
       - name: Upload APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4 # Updated to v4
         with:
           name: EchoCoreCB-Mobile-AGI
           path: bin/*.apk
-          
