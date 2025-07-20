@@ -53,7 +53,7 @@ jobs:
           mkdir -p "$LIBFFI_RECIPE_DIR"
           
           # Create __init__.py for the custom libffi recipe
-          cat << 'EOF' > "$LIBFFI_RECIPE_DIR/__init__.py"
+          cat << 'EOF_INIT_PY' > "$LIBFFI_RECIPE_DIR/__init__.py"
 from pythonforandroid.recipe import Recipe
 
 class LibffiRecipe(Recipe):
@@ -74,11 +74,11 @@ class LibffiRecipe(Recipe):
         # Example: self.apply_patch(self.get_recipe_dir(), "fix-autoconf.patch", arch.arch)
 
 recipe = LibffiRecipe()
-EOF
+EOF_INIT_PY
           
           # If a patch file is still needed for the chosen libffi version, create it here.
           # For example, if v3.3 still has the autoconf issue, you'd uncomment and refine this:
-          # cat << 'EOF' > "$LIBFFI_RECIPE_DIR/fix-autoconf.patch"
+          # cat << 'EOF_PATCH_FILE' > "$LIBFFI_RECIPE_DIR/fix-autoconf.patch"
           # --- a/configure.ac
           # +++ b/configure.ac
           # @@ -1,6 +1,6 @@
@@ -89,7 +89,7 @@ EOF
           #  AC_INIT([libffi], [3.3], [http://sourceware.org/bugzilla/])
           #  AC_CONFIG_SRCDIR([src/raw_api.c])
           #  AC_CONFIG_HEADERS([config.h])
-          # EOF
+          # EOF_PATCH_FILE
 
       # This step modifies buildozer.spec to point to our custom recipes.
       - name: Configure buildozer.spec for Custom Recipes
@@ -100,9 +100,8 @@ EOF
             buildozer init
           fi
           # Add or update the p4a.local_recipes entry
-          sed -i '/^\[app\]/a\
-p4a.local_recipes = ./custom_recipes
-' "$BUILD_SPEC_FILE"
+          # The 'sed' command needs to be on a single line or properly escaped for multi-line.
+          sed -i '/^\[app\]/a\p4a.local_recipes = ./custom_recipes' "$BUILD_SPEC_FILE"
           echo "Updated buildozer.spec to use custom_recipes."
       # --- End of Custom Recipe Intervention ---
 
@@ -139,13 +138,4 @@ p4a.local_recipes = ./custom_recipes
         run: buildozer init || true
 
       - name: Build and package the APK
-        # The --p4a-recipes-path argument is now redundant if we modify buildozer.spec,
-        # but leaving it for clarity or if buildozer.spec modification fails.
-        # The primary mechanism is the modification of buildozer.spec.
-        run: yes | buildozer android debug
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: EchoCoreCB-Mobile-AGI
-          path: bin/*.apk
+        # The --p
