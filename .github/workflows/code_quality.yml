@@ -55,6 +55,7 @@ jobs:
           # Code complexity analysis
           echo "" >> quality-report.md
           echo "## Code Complexity" >> quality-report.md
+          # Using 'find' and 'wc' for total lines, then awk for formatting
           find . -name "*.py" -exec wc -l {} + | tail -1 | awk '{print "**Total Lines:** " $1}' >> quality-report.md
           
           # Import organization
@@ -69,8 +70,10 @@ jobs:
           # Security issues with bandit
           echo "" >> quality-report.md
           echo "## Security Analysis (Bandit)" >> quality-report.md
+          # Run bandit first. If it succeeds, then parse its JSON output.
           if bandit -r . -f json -o bandit-report.json; then
-            python -c "
+            # Use a heredoc to pass the Python script directly to python3
+            python3 <<EOF_PYTHON_SCRIPT >> quality-report.md
 import json
 try:
     with open('bandit-report.json') as f:
@@ -78,13 +81,15 @@ try:
     issues = data.get('results', [])
     if issues:
         print(f'⚠️ Found {len(issues)} potential security issues')
-        for issue in issues[:3]:
+        for issue in issues[:3]: # Limit to first 3 issues for brevity in report
             print(f'- {issue.get("test_name", "Unknown")}: {issue.get("issue_text", "No details")}')
     else:
         print('✅ No security issues detected')
-except:
-    print('✅ Security analysis completed')
-" >> quality-report.md
+except Exception as e:
+    print(f'✅ Security analysis completed (Error parsing report: {e})')
+EOF_PYTHON_SCRIPT
+          else
+            echo "⚠️ Bandit failed to run or found issues. Check workflow logs for raw output." >> quality-report.md
           fi
           
       - name: Upload Quality Report
@@ -96,10 +101,11 @@ except:
       - name: Quality Gate Check
         run: |
           # Simple quality gate - can be made more sophisticated
+          # Counts critical errors (E9, F63, F7, F82) from Flake8
           CRITICAL_ISSUES=$(flake8 . --count --select=E9,F63,F7,F82 --statistics 2>/dev/null | tail -1 | cut -d' ' -f1 || echo 0)
           if [ "$CRITICAL_ISSUES" -gt 0 ]; then
             echo "Quality gate failed: $CRITICAL_ISSUES critical issues found"
-            exit 1
+            exit 1 # Fail the workflow if critical issues are found
           else
             echo "Quality gate passed: No critical issues"
           fi
