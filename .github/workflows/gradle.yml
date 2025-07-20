@@ -1,0 +1,95 @@
+# File: .github/workflows/android_comprehensive_ci.yml
+
+name: Android Comprehensive CI - EchoCoreCB
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+  pull_request:
+    branches: [ "main" ] # Only run on main branch PRs to avoid duplicate builds for feature branches
+  workflow_dispatch: # Allows manual triggering
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # Required for actions/checkout and building
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      # Use the specialized Gradle setup action for optimal caching and performance.
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4 # Using v4 for latest features
+
+      # Explicitly set up Android SDK components.
+      # This ensures the environment is fully ready for Android builds,
+      # including lint checks and potential future instrumentation tests.
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v2
+        # You can add specific SDK platforms or build tools if required by your project:
+        # with:
+        #   sdk-platforms: 'platforms;android-34'
+        #   build-tools: 'build-tools;34.0.0'
+
+      # Run Unit Tests
+      - name: Run Unit Tests
+        run: ./gradlew testDebugUnitTest --continue # --continue allows subsequent tasks to run even if tests fail
+
+      # Run Android Lint checks for code quality and Android best practices.
+      - name: Run Android Lint
+        run: ./gradlew lintDebug --continue # --continue allows subsequent tasks to run even if lint finds issues
+
+      # Build the Android APK (Debug version for CI)
+      - name: Build Android APK (Debug)
+        run: ./gradlew assembleDebug
+
+      # Upload the generated APK as a workflow artifact.
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+
+      # Optional: Upload Test and Lint Reports for easier debugging
+      - name: Upload Test Reports
+        if: always() # Run even if previous steps failed
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: app/build/reports/tests/debugUnitTest/
+
+      - name: Upload Lint Report
+        if: always() # Run even if previous steps failed
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-report
+          path: app/build/reports/lint-results-debug.html
+
+  # Separate job for Dependency Submission for security and clarity.
+  # This job will run in parallel with the build-and-test job.
+  dependency-submission:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Required for submitting the dependency graph
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      # Generates and submits a dependency graph for Dependabot Alerts.
+      - name: Generate and Submit Dependency Graph
+        uses: gradle/actions/dependency-submission@v4 # Using v4 for latest features
