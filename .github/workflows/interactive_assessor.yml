@@ -30,6 +30,7 @@ jobs:
       - name: Parse Assessment Command
         id: parse-command
         run: |
+          COMMAND=""
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             COMMAND="${{ github.event.inputs.assessment_command }}"
           else
@@ -40,13 +41,38 @@ jobs:
               COMMAND="security-audit"
             elif echo "$COMMENT" | grep -q "/assess performance"; then
               COMMAND="performance-test"
+            elif echo "$COMMENT" | grep -q "/assess code-review"; then # Added explicit code-review command
+              COMMAND="code-review"
+            elif echo "$COMMENT" | grep -q "/assess dependency-check"; then # Added explicit dependency-check command
+              COMMAND="dependency-check"
             else
-              COMMAND="health-check"
+              COMMAND="health-check" # Default for comments if no specific command is found
             fi
           fi
           echo "command=$COMMAND" >> $GITHUB_OUTPUT
           echo "Assessment command: $COMMAND"
           
+      - name: Set up Python (if needed for command)
+        # Only set up Python if a Python-dependent command is selected
+        if: |
+          steps.parse-command.outputs.command == 'security-audit' ||
+          steps.parse-command.outputs.command == 'performance-test' ||
+          steps.parse-command.outputs.command == 'code-review' ||
+          steps.parse-command.outputs.command == 'dependency-check'
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          
+      - name: Install Python Analysis Tools (if needed)
+        if: |
+          steps.parse-command.outputs.command == 'security-audit' ||
+          steps.parse-command.outputs.command == 'performance-test' ||
+          steps.parse-command.outputs.command == 'code-review' ||
+          steps.parse-command.outputs.command == 'dependency-check'
+        run: |
+          pip install safety bandit pytest pytest-benchmark memory-profiler psutil flake8 pylint black isort mypy complexity
+          pip install -r requirements.txt || echo "No requirements.txt found, skipping." # Attempt to install project requirements
+
       - name: Run Health Check
         if: steps.parse-command.outputs.command == 'health-check'
         run: |
@@ -82,16 +108,19 @@ jobs:
         run: |
           echo "🔒 Security Audit Results" > assessment-result.md
           echo "========================" >> assessment-result.md
-          pip install safety bandit
-          echo "Running security audit..." >> assessment-result.md
-          bandit -r . -f txt >> assessment-result.md || echo "Security audit completed" >> assessment-result.md
+          echo "Running security audit with Bandit..." >> assessment-result.md
+          # Run bandit and redirect its output to the report.
+          # The '|| true' ensures the step doesn't fail if Bandit finds issues.
+          bandit -r . -f txt >> assessment-result.md || true
+          echo "✅ Security audit completed" >> assessment-result.md
           
       - name: Run Performance Test
         if: steps.parse-command.outputs.command == 'performance-test'
         run: |
           echo "⚡ Performance Test Results" > assessment-result.md
           echo "==========================" >> assessment-result.md
-          python -c "
+          # Use heredoc for the Python script
+          python3 <<EOF_PYTHON_SCRIPT_PERF >> assessment-result.md
 import time
 import sys
 start = time.time()
@@ -100,8 +129,65 @@ result = sum(i*i for i in range(100000))
 end = time.time()
 print(f'**Computation Test:** {end-start:.4f} seconds')
 print(f'**Result:** {result}')
-" >> assessment-result.md
+EOF_PYTHON_SCRIPT_PERF
           echo "✅ Performance test completed" >> assessment-result.md
+
+      - name: Run Code Review (Flake8, Pylint, Black, isort, Mypy, Complexity)
+        if: steps.parse-command.outputs.command == 'code-review'
+        run: |
+          echo "📝 Code Review Results" > assessment-result.md
+          echo "=====================" >> assessment-result.md
+          echo "" >> assessment-result.md
+
+          # Flake8
+          echo "## Flake8 (Style Guide Enforcement)" >> assessment-result.md
+          flake8 . --statistics --max-line-length=120 --exclude=.git,__pycache__,build >> assessment-result.md || true
+          echo "" >> assessment-result.md
+
+          # Pylint
+          echo "## Pylint (Code Analysis)" >> assessment-result.md
+          pylint $(find . -name "*.py" -not -path "./.venv/*" -not -path "./build/*" -not -path "./dist/*") >> assessment-result.md || true
+          echo "" >> assessment-result.md
+
+          # Black (Code Formatting Check)
+          echo "## Black (Code Formatting Check)" >> assessment-result.md
+          black . --check --diff >> assessment-result.md || echo "No formatting issues detected or Black not configured." >> assessment-result.md || true
+          echo "" >> assessment-result.md
+
+          # isort (Import Sorting Check)
+          echo "## isort (Import Sorting Check)" >> assessment-result.md
+          isort . --check-only --diff >> assessment-result.md || echo "No import sorting issues detected or isort not configured." >> assessment-result.md || true
+          echo "" >> assessment-result.md
+
+          # Mypy (Static Type Checking)
+          echo "## Mypy (Static Type Checking)" >> assessment-result.md
+          mypy . >> assessment-result.md || echo "No type errors detected or Mypy not configured." >> assessment-result.md || true
+          echo "" >> assessment-result.md
+
+          # Complexity (Cyclomatic Complexity)
+          echo "## Code Complexity (Cyclomatic Complexity)" >> assessment-result.md
+          complexity . >> assessment-result.md || echo "Complexity analysis completed." >> assessment-result.md || true
+          echo "✅ Code review completed" >> assessment-result.md
+
+      - name: Run Dependency Check
+        if: steps.parse-command.outputs.command == 'dependency-check'
+        run: |
+          echo "📦 Dependency Check Results" > assessment-result.md
+          echo "==========================" >> assessment-result.md
+          echo "" >> assessment-result.md
+          if [ -f "requirements.txt" ]; then
+            echo "## requirements.txt Analysis" >> assessment-result.md
+            cat requirements.txt >> assessment-result.md
+            echo "" >> assessment-result.md
+            echo "## pip list (Installed Packages)" >> assessment-result.md
+            pip list >> assessment-result.md
+            echo "" >> assessment-result.md
+            echo "## Safety (Vulnerability Scan)" >> assessment-result.md
+            safety check -r requirements.txt >> assessment-result.md || echo "No known vulnerabilities or safety check failed." >> assessment-result.md || true
+          else
+            echo "No requirements.txt found for dependency check." >> assessment-result.md
+          fi
+          echo "✅ Dependency check completed" >> assessment-result.md
           
       - name: Comment Assessment Results
         if: github.event_name == 'issue_comment'
@@ -122,4 +208,3 @@ print(f'**Result:** {result}')
         with:
           name: interactive-assessment-results
           path: assessment-result.md
-          
