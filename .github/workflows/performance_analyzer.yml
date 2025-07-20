@@ -55,9 +55,12 @@ jobs:
           # Code execution timing
           echo "## Code Performance" >> performance-report.md
           if [ -f "test_performance.py" ]; then
-            python -m pytest test_performance.py --benchmark-only --benchmark-json=benchmark.json || echo "No benchmark tests found"
+            # Run pytest-benchmark. The '|| true' ensures the step doesn't fail if no benchmarks are found.
+            python -m pytest test_performance.py --benchmark-only --benchmark-json=benchmark.json || true
+            
             if [ -f "benchmark.json" ]; then
-              python -c "
+              # Use a heredoc for the Python script that parses benchmark.json
+              python3 <<EOF_PYTHON_SCRIPT_BENCHMARK >> performance-report.md
 import json
 try:
     with open('benchmark.json') as f:
@@ -70,32 +73,41 @@ try:
             mean = bench.get('stats', {}).get('mean', 0)
             print(f'- **{name}:** {mean:.4f} seconds')
     else:
-        print('No benchmark data available')
-except:
-    print('Benchmark analysis completed')
-" >> performance-report.md
+        print('No benchmark data available.')
+except Exception as e:
+    print(f'Error parsing benchmark report: {e}')
+EOF_PYTHON_SCRIPT_BENCHMARK
+            else
+              echo "No benchmark data available (benchmark.json not created)." >> performance-report.md
+            fi
           else
-            echo "No performance tests found (create test_performance.py)" >> performance-report.md
+            echo "No performance tests found (create test_performance.py)." >> performance-report.md
           fi
           
           # Memory usage analysis
           echo "" >> performance-report.md
           echo "## Memory Analysis" >> performance-report.md
-          python -c "
+          # Use a heredoc for the Python script that checks memory usage
+          python3 <<EOF_PYTHON_SCRIPT_MEMORY >> performance-report.md
 import psutil
 import os
-process = psutil.Process(os.getpid())
-memory_info = process.memory_info()
-print(f'**Current Memory Usage:** {memory_info.rss / 1024 / 1024:.2f} MB')
-print(f'**Virtual Memory:** {memory_info.vms / 1024 / 1024:.2f} MB')
-" >> performance-report.md
+try:
+    process = psutil.Process(os.getpid())
+    memory_info = process.memory_info()
+    print(f'**Current Memory Usage:** {memory_info.rss / 1024 / 1024:.2f} MB')
+    print(f'**Virtual Memory:** {memory_info.vms / 1024 / 1024:.2f} MB')
+except Exception as e:
+    print(f'Error retrieving memory info: {e}')
+EOF_PYTHON_SCRIPT_MEMORY
           
       - name: Performance Regression Check
         if: github.event_name == 'pull_request'
         run: |
           echo "Checking for performance regressions..."
-          # This could compare with baseline performance metrics
-          echo "✅ No significant performance regressions detected"
+          # This step would typically involve comparing current benchmark.json with a baseline
+          # stored as an artifact from a previous successful build on the main branch.
+          # For a simple check, we'll just output a message.
+          echo "✅ No significant performance regressions detected (placeholder check)."
           
       - name: Upload Performance Report
         uses: actions/upload-artifact@v4
