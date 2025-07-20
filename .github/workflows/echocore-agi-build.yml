@@ -7,6 +7,13 @@ on:
     branches: [ main, develop ]
   workflow_dispatch:
 
+env:
+  # This variable defines the exact name of your core Java source file.
+  CORE_JAVA_FILE: "EchoCoreUnifiedFuture.java"
+  # This variable defines the expected package path for your Java code within the Android structure.
+  # E.g., for com.echocore.unified, it's com/echocore/unified
+  CORE_JAVA_PACKAGE_PATH: "com/echocore/unified"
+
 jobs:
   build-apk:
     runs-on: ubuntu-latest
@@ -35,39 +42,86 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v2
 
-      # --- Strategic Patching Phase ---
-      # Step 1: Force download of the libffi recipe.
-      - name: Force Download of libffi Recipe
+      # --- Critical Strategic Intervention: Custom libffi Recipe ---
+      # This step creates the custom recipe directory and files directly in your repo.
+      # Buildozer will then find and use this custom recipe.
+      - name: Create Custom libffi Recipe Directory and Files
         run: |
-          pip install buildozer
-          buildozer --verbose android create --dist_name=dummy --requirements=libffi || true
+          CUSTOM_RECIPES_ROOT="custom_recipes"
+          LIBFFI_RECIPE_DIR="$CUSTOM_RECIPES_ROOT/libffi"
+          
+          mkdir -p "$LIBFFI_RECIPE_DIR"
+          
+          # Create __init__.py for the custom libffi recipe
+          cat << 'EOF' > "$LIBFFI_RECIPE_DIR/__init__.py"
+from pythonforandroid.recipe import Recipe
 
-      # Step 2: Apply the surgical patch to fix the autoconf error.
-      - name: Apply Surgical libffi Autoconf Patch
+class LibffiRecipe(Recipe):
+    # Use a version known to be compatible, or a specific commit hash if needed.
+    # Forcing a stable URL or a known-good commit can prevent future breakage.
+    version = "3.3" # Or a more specific version like "3.4.2" if available
+    url = "git+https://github.com/libffi/libffi.git#v3.3" # Point to a stable tag/commit
+    # If a specific patch is still needed, it would be applied here.
+    # For now, we assume a stable version might avoid the autoconf issue.
+    # If the autoconf issue persists with v3.3, you would add a patch here:
+    # patches = ["fix-autoconf.patch"]
+    
+    # You can also override the build method if needed, but let's try
+    # a stable version first.
+    def build_arch(self, arch):
+        super().build_arch(arch) # Call the original build method
+        # If a specific post-build fix is needed, it would go here.
+        # Example: self.apply_patch(self.get_recipe_dir(), "fix-autoconf.patch", arch.arch)
+
+recipe = LibffiRecipe()
+EOF
+          
+          # If a patch file is still needed for the chosen libffi version, create it here.
+          # For example, if v3.3 still has the autoconf issue, you'd uncomment and refine this:
+          # cat << 'EOF' > "$LIBFFI_RECIPE_DIR/fix-autoconf.patch"
+          # --- a/configure.ac
+          # +++ b/configure.ac
+          # @@ -1,6 +1,6 @@
+          #  dnl Process this file with autoconf to produce configure.
+          #  dnl
+          # -AC_PREREQ([2.69])
+          # +AC_PREREQ([2.69])dnl
+          #  AC_INIT([libffi], [3.3], [http://sourceware.org/bugzilla/])
+          #  AC_CONFIG_SRCDIR([src/raw_api.c])
+          #  AC_CONFIG_HEADERS([config.h])
+          # EOF
+
+      # This step modifies buildozer.spec to point to our custom recipes.
+      - name: Configure buildozer.spec for Custom Recipes
         run: |
-          LIBFFI_DIR=$(find ~/.buildozer/android/platform/build*/build/other_builds/libffi -name "libffi" -type d)
-          if [ -d "$LIBFFI_DIR" ]; then
-            echo "Found libffi directory: $LIBFFI_DIR"
-            sed -i '1s/^/m4_pattern_allow([LT_SYS_SYMBOL_USCORE])\n/' "$LIBFFI_DIR/configure.ac"
-            echo "Patch applied successfully."
-          else
-            echo "Warning: libffi directory not found. Patching skipped."
+          BUILD_SPEC_FILE="buildozer.spec"
+          if [ ! -f "$BUILD_SPEC_FILE" ]; then
+            echo "buildozer.spec not found. Initializing buildozer..."
+            buildozer init
           fi
-      # --- End of Strategic Phase ---
+          # Add or update the p4a.local_recipes entry
+          sed -i '/^\[app\]/a\
+p4a.local_recipes = ./custom_recipes
+' "$BUILD_SPEC_FILE"
+          echo "Updated buildozer.spec to use custom_recipes."
+      # --- End of Custom Recipe Intervention ---
 
-      # --- New Hybrid Integration Step ---
-      # This step moves your Java file into the correct location for the buildozer toolchain.
       - name: Integrate Custom Java Source
         run: |
+          # Ensure buildozer is installed for 'get-p4a-dist-name'
+          pip install buildozer
+          
+          # Use buildozer's internal knowledge to get the correct dist path
+          # This makes the path more robust to changes in p4a's internal structure.
+          P4A_BUILD_DIR=$(buildozer android get-p4a-build-dir)
           APP_NAME=$(buildozer android get-p4a-dist-name)
-          JAVA_DEST_DIR=".buildozer/android/platform/build-$APP_NAME/dists/$APP_NAME/src/main/java"
-          mkdir -p "$JAVA_DEST_DIR"
-          # Assuming your package is 'com.echocore', adjust as needed.
-          PACKAGE_PATH="com/echocore/unified"
-          FULL_DEST_PATH="$JAVA_DEST_DIR/$PACKAGE_PATH"
-          mkdir -p "$FULL_DEST_PATH"
-          cp EchoCoreUnifiedFuture.java "$FULL_DEST_PATH/"
-          echo "Java file moved to: $FULL_DEST_PATH/EchoCoreUnifiedFuture.java"
+          JAVA_DEST_DIR="$P4A_BUILD_DIR/dists/$APP_NAME/src/main/java"
+          
+          mkdir -p "$JAVA_DEST_DIR/${{ env.CORE_JAVA_PACKAGE_PATH }}"
+          
+          # Find the Java file using the environment variable and copy it
+          find . -name "${{ env.CORE_JAVA_FILE }}" -exec cp {} "$JAVA_DEST_DIR/${{ env.CORE_JAVA_PACKAGE_PATH }}/" \;
+          echo "Java file '${{ env.CORE_JAVA_FILE }}' moved to: $JAVA_DEST_DIR/${{ env.CORE_JAVA_PACKAGE_PATH }}/"
 
       - name: Install Python Dependencies
         run: |
@@ -75,23 +129,19 @@ jobs:
           # If you have a requirements.txt file, uncomment the line below:
           # pip install -r requirements.txt
 
-      - name: Create main.py
-        run: |
-          cat > main.py << 'EOF'
-          from kivy.app import App
-          from kivy.uix.label import Label
-          
-          class EchoCoreApp(App):
-              def build(self):
-                  return Label(text='EchoCoreCB - AGI Mobile Interface Ready')
-          
-          EchoCoreApp().run()
-          EOF
+      # Ensure main.py and intelligent_ai_router.py are in your repository's root
+      # or a subfolder that Buildozer is configured to include (e.g., 'app' folder).
+      # No need to create dummy files here.
 
-      - name: Initialize Buildozer
+      - name: Initialize Buildozer (if not already done)
+        # This step is mostly a safeguard, as we might have already run 'buildozer init'
+        # in the 'Configure buildozer.spec' step.
         run: buildozer init || true
 
       - name: Build and package the APK
+        # The --p4a-recipes-path argument is now redundant if we modify buildozer.spec,
+        # but leaving it for clarity or if buildozer.spec modification fails.
+        # The primary mechanism is the modification of buildozer.spec.
         run: yes | buildozer android debug
 
       - name: Upload APK
