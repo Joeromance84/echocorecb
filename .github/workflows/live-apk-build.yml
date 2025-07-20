@@ -1,85 +1,97 @@
-name: Live APK Build - EchoCoreCB
+# File: .github/workflows/star_mapper.yml
+
+name: Star Mapper - System and Dependency Audit
 
 on:
-  push:
-    branches: [ main, develop ]
-  workflow_dispatch:
+  workflow_dispatch: # Allows manual triggering
+  schedule:
+    - cron: '0 0 * * 1' # Runs every Monday at midnight UTC
 
 jobs:
-  build-apk:
+  map-environment:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Checkout the repository code
-      - name: Checkout repository
-        uses: actions/checkout@v4 # Updated to v4 for latest features and security
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-      # Step 2: Setup Java Development Kit (JDK)
-      # Essential for Android build tools (Gradle, AAPT, etc.)
-      - name: Install Java 17
-        uses: actions/setup-java@v4 # Updated to v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
+      # --- STAR MAPPER CORE MODULES ---
 
-      # Step 3: Setup Python environment
-      # Python is needed for Buildozer and your application's logic.
-      - name: Setup Python
-        uses: actions/setup-python@v5 # Updated to v5
-        with:
-          python-version: '3.11'
-          cache: 'pip' # Enable pip caching to speed up dependency installation
-
-      # Step 4: Setup Android SDK
-      # Provides Android build tools, platform tools, and SDK platforms.
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v2 # Current stable version
-
-      # Step 5: Install core system-level build dependencies
-      # This is where we ensure autoconf, automake, and libtool are present.
-      # build-essential provides fundamental build tools like gcc.
-      - name: Install System Build Tools
+      # 1. Map the Local File System
+      - name: System File Scan
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential git autoconf automake libtool
+          echo "--- Filesystem Map ---"
+          tree -L 3 . || ls -R
+          echo "---"
 
-      # Step 6: Install Python-specific dependencies
-      # Buildozer, Cython, and Kivy are installed via pip.
-      - name: Install Python Dependencies
+      # 2. Analyze the Host Machine
+      - name: Host System Analysis
+        id: host_analysis
         run: |
-          pip install buildozer cython kivy python-for-android # Added python-for-android explicitly
-          # If you have a requirements.txt file, uncomment the line below:
-          # pip install -r requirements.txt
+          echo "--- Host Environment ---"
+          echo "OS: $(uname -a)"
+          echo "Current Working Directory: $(pwd)"
+          echo "Filesystem Type: $(df -T . | awk 'NR>1 {print $2}')"
+          echo "---"
 
-      # Step 7: Create a minimal main.py for demonstration/testing
-      # This ensures a basic Kivy app exists for Buildozer to package.
-      - name: Create main.py (for testing)
+      # 3. Validate Critical Dependencies
+      - name: Dependency Validation
         run: |
-          cat > main.py << 'EOF'
-          from kivy.app import App
-          from kivy.uix.label import Label
+          echo "--- Dependency Manifest ---"
+          echo "Python Version:"
+          python3 --version || echo "Python not found"
+          echo "Java Version:"
+          java -version || echo "Java not found"
+          echo "Ant Version:"
+          ant -version || echo "Ant not found"
+          echo "Buildozer Version:"
+          buildozer --version || echo "Buildozer not found"
+          echo "---"
+
+      # 4. Search for Key Files (your 'Constellations')
+      - name: Scan for Key Configuration Files
+        id: file_scan
+        run: |
+          echo "--- Configuration Scan ---"
+          echo "Searching for buildozer.spec..."
+          BUILD_SPEC=$(find . -name "buildozer.spec" -print -quit)
+          if [ -n "$BUILD_SPEC" ]; then
+            echo "buildozer.spec found at: $BUILD_SPEC"
+            # Optional: Print its contents for a quick check
+            echo "--- Contents of buildozer.spec ---"
+            cat "$BUILD_SPEC"
+            echo "---"
+            echo "spec_found=true" >> $GITHUB_OUTPUT
+          else
+            echo "buildozer.spec not found."
+            echo "spec_found=false" >> $GITHUB_OUTPUT
+          fi
           
-          class EchoCoreApp(App):
-              def build(self):
-                  return Label(text='EchoCoreCB - AGI Mobile Interface Ready')
-          
-          EchoCoreApp().run()
-          EOF
+          echo "Searching for EchoCoreUnifiedFuture.java..."
+          JAVA_FILE=$(find . -name "EchoCoreUnifiedFuture.java" -print -quit)
+          if [ -n "$JAVA_FILE" ]; then
+            echo "EchoCoreUnifiedFuture.java found at: $JAVA_FILE"
+            echo "java_found=true" >> $GITHUB_OUTPUT
+          else
+            echo "EchoCoreUnifiedFuture.java not found."
+            echo "java_found=false" >> $GITHUB_OUTPUT
+          fi
+          echo "---"
 
-      # Step 8: Initialize Buildozer project
-      # '|| true' ensures the workflow doesn't fail if .buildozer already exists.
-      - name: Initialize Buildozer
-        run: buildozer init || true
-
-      # Step 9: Build and package the APK
-      # 'yes |' automatically confirms any prompts from buildozer.
-      - name: Build and package the APK
-        run: yes | buildozer android debug
-
-      # Step 10: Upload the generated APK artifact
-      # Makes the APK available for download from the GitHub Actions run.
-      - name: Upload APK
-        uses: actions/upload-artifact@v4 # Updated to v4
-        with:
-          name: EchoCoreCB-Mobile-AGI
-          path: bin/*.apk
+      # 5. Generate the Final Report (the "Star Chart")
+      - name: Generate Final Audit Report
+        run: |
+          echo "### Star Mapper Audit Complete" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "#### System State" >> $GITHUB_STEP_SUMMARY
+          echo " - Host OS: $(uname -s)" >> $GITHUB_STEP_SUMMARY
+          echo " - Kernel: $(uname -r)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### Dependency Check" >> $GITHUB_STEP_SUMMARY
+          echo " - Python: $(python3 --version 2>&1 || echo 'Not Found')" >> $GITHUB_STEP_SUMMARY
+          echo " - Java: $(java -version 2>&1 || echo 'Not Found')" >> $GITHUB_STEP_SUMMARY
+          echo " - buildozer: $(buildozer --version 2>&1 || echo 'Not Found')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### Key Files" >> $GITHUB_STEP_SUMMARY
+          echo " - buildozer.spec found: ${{ steps.file_scan.outputs.spec_found }}" >> $GITHUB_STEP_SUMMARY
+          echo " - EchoCoreUnifiedFuture.java found: ${{ steps.file_scan.outputs.java_found }}" >> $GITHUB_STEP_SUMMARY
