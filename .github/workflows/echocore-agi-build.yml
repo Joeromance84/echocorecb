@@ -7,7 +7,6 @@ on:
     branches: [ "main", "develop" ]
   pull_request:
     branches: [ "main", "develop" ]
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
 jobs:
@@ -15,36 +14,34 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Checkout the repository code
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # Step 2: Set up the Java environment
-      # We need a modern JDK to run this code. Java 17 is a good choice.
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
           
-      # Step 3: Create the base directories for the application
-      # The Java code expects these directories to exist. We'll create them here.
       - name: Create EchoAI directories
         run: |
           mkdir -p .echoai_future/{plugins,training,logs,fake_includes}
 
-      # Step 4: Compile the Java source code
-      # This command translates the .java file into a .class file.
+      # --- Critical Fixes Applied Here ---
+      # Corrects the path for compilation.
       - name: Compile EchoCore
-        run: javac EchoCoreUnifiedFuture.java
+        run: javac src/EchoCoreUnifiedFuture.java
+      # Assumes your file is in a directory named 'src'
+      # If your file is at the root, the previous version was correct.
+      # If your file is in src/main/java, use 'javac src/main/java/EchoCoreUnifiedFuture.java'
 
-      # Step 5: Run the compiled Java application
-      # This step executes your program, triggering all its internal logic.
+      # Corrects the path for running the compiled class.
       - name: Run EchoCoreUnifiedFuture
-        run: java EchoCoreUnifiedFuture
+        run: java -cp src EchoCoreUnifiedFuture
+      # '-cp src' tells the JVM to look for compiled .class files in the 'src' directory.
+      # If your file is at the root, simply use 'java EchoCoreUnifiedFuture'.
+      # If your file is in src/main/java, use 'java -cp src/main/java EchoCoreUnifiedFuture'
 
-      # Step 6: Upload the compiled code as a build artifact
-      # This saves the .class files, which you can download for later use or inspection.
       - name: Upload Compiled Code
         uses: actions/upload-artifact@v4
         with:
