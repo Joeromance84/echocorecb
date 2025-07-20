@@ -17,6 +17,24 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      # --- Diagnostic and Self-Healing Phase ---
+      # This step finds the Java source file and stores its path.
+      - name: Locate Java Source File
+        id: find_source
+        run: |
+          JAVA_FILE_PATH=$(find . -name "EchoCoreUnifiedFuture.java" -print -quit)
+          if [ -z "$JAVA_FILE_PATH" ]; then
+            echo "Error: EchoCoreUnifiedFuture.java not found in the repository."
+            exit 1
+          fi
+          echo "Found Java source at: $JAVA_FILE_PATH"
+          echo "SOURCE_PATH=$JAVA_FILE_PATH" >> $GITHUB_ENV
+          
+          # Also, set the directory for classpath
+          SOURCE_DIR=$(dirname "$JAVA_FILE_PATH")
+          echo "SOURCE_DIR=$SOURCE_DIR" >> $GITHUB_ENV
+      # --- End of Diagnostic Phase ---
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -27,23 +45,16 @@ jobs:
         run: |
           mkdir -p .echoai_future/{plugins,training,logs,fake_includes}
 
-      # --- Critical Fixes Applied Here ---
-      # Corrects the path for compilation.
+      # Step 4: Compile the Java source code using the discovered path
       - name: Compile EchoCore
-        run: javac src/EchoCoreUnifiedFuture.java
-      # Assumes your file is in a directory named 'src'
-      # If your file is at the root, the previous version was correct.
-      # If your file is in src/main/java, use 'javac src/main/java/EchoCoreUnifiedFuture.java'
+        run: javac "$SOURCE_PATH"
 
-      # Corrects the path for running the compiled class.
+      # Step 5: Run the compiled Java application using the discovered path
       - name: Run EchoCoreUnifiedFuture
-        run: java -cp src EchoCoreUnifiedFuture
-      # '-cp src' tells the JVM to look for compiled .class files in the 'src' directory.
-      # If your file is at the root, simply use 'java EchoCoreUnifiedFuture'.
-      # If your file is in src/main/java, use 'java -cp src/main/java EchoCoreUnifiedFuture'
+        run: java -cp "$SOURCE_DIR" EchoCoreUnifiedFuture
 
       - name: Upload Compiled Code
         uses: actions/upload-artifact@v4
         with:
           name: EchoCore-compiled
-          path: ./*.class
+          path: "$SOURCE_DIR/*.class"
