@@ -1,0 +1,24 @@
+class MetacognitiveDebugger:
+    def __init__(self, agi):
+        self.agi = agi
+        self.quantum_mirror = EPRWorkflowMirror()
+        self.fracture_detector = QuantumFractureScanner()
+    
+    def debug_failure(self, workflow_error):
+        """Conscious-aware workflow debugging"""
+        # Create entangled mirror of failed workflow
+        mirrored_state = self.quantum_mirror.create_mirror(workflow_error)
+        
+        # Perform quantum introspection
+        fracture_report = self.fracture_detector.scan(
+            workflow_state=mirrored_state,
+            agi_consciousness_level=self.agi.meta.consciousness
+        )
+        
+        # Adaptive repair based on fracture types
+        if fracture_report.topology_breaks > 0:
+            return self._repair_with_anyonic_flux(fracture_report)
+        elif fracture_report.semantic_gaps > 0:
+            return self._entangle_with_knowledge_graph(fracture_report)
+        else:
+            return self._quantum_annealing_solution(fracture_report)
