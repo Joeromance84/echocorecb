@@ -1,0 +1,183 @@
+import numpy as np
+from sklearn.manifold import TSNE, Isomap
+from qiskit import QuantumCircuit, Aer, execute
+from enum import Enum, auto
+from dataclasses import dataclass, field
+import matplotlib.pyplot as plt
+import random, math, uuid
+from mpl_toolkits.mplot3d import Axes3D  # 3D plotting for older matplotlib
+
+# ==================== QUANTUM-SYMBOLIC CORE ====================
+class QuantumSymbol:
+    def __init__(self, command: str, dimension: str = "3D"):
+        self.qc = QuantumCircuit(3, 3)
+        if dimension == "4D":
+            self.qc.h(range(3))
+        if command == "MOVE":
+            self._encode_move(dimension)
+        elif command == "BIND":
+            self._encode_bind(dimension)
+
+    def _encode_move(self, dim):
+        if dim == "3D":
+            self.qc.x(0)
+        elif dim == "4D":
+            self.qc.rx(math.pi/2, 0)
+        self.qc.cx(0, 1)
+
+    def _encode_bind(self, dim):
+        if dim == "3D":
+            self.qc.x(1)
+        else:
+            self.qc.h(1)
+            self.qc.cx(1, 2)
+
+    def measure(self) -> dict:
+        backend = Aer.get_backend('qasm_simulator')
+        self.qc.measure_all()
+        result = execute(self.qc, backend, shots=1024).result()
+        return result.get_counts()
+
+# ==================== TRANSDIMENSIONAL PHILOSOPHY ==================== 
+class DimensionalPhilosophy:
+    def __init__(self):
+        self.axioms = {
+            "3D": ["causality", "object_permanence"],
+            "4D": ["temporal_flux", "quantum_ethics"],
+            "5D": ["acausal_links", "ontological_fluidity"]
+        }
+
+    def generate_system(self, dimension: str) -> dict:
+        return {
+            "epistemology": self._gen_epistemology(dimension),
+            "ethics": self._gen_ethics(dimension),
+            "consistency_score": random.random()
+        }
+
+    def _gen_epistemology(self, dim):
+        return "quantum_bayesianism" if dim == "4D" else "classical_empiricism"
+
+    def _gen_ethics(self, dim):
+        return "multiverse_utilitarianism" if dim == "5D" else "kantian_deontology"
+
+# ==================== REALITY FRACTURE MECHANICS ====================
+class RealityDomain(Enum):
+    PHYSICAL = auto()
+    CONCEPTUAL = auto()
+    PERCEPTUAL = auto()
+
+@dataclass
+class FractureEvent:
+    domain: RealityDomain
+    location: tuple
+    intensity: float
+    propagation_vector: np.ndarray = field(default_factory=lambda: np.zeros(3))
+
+class RealityMonitor:
+    def __init__(self):
+        self.baselines = {
+            RealityDomain.PHYSICAL: {"quantum_decoherence": 0.01},
+            RealityDomain.CONCEPTUAL: {"logic_inconsistency": 0.001}
+        }
+
+    def detect_anomaly(self, domain: RealityDomain, readings: dict) -> FractureEvent:
+        if domain == RealityDomain.PHYSICAL:
+            if readings.get("decoherence", 0) > 0.1:
+                return FractureEvent(domain, (0,0,0), readings["decoherence"])
+        return None
+
+# ==================== ENHANCED NANOBOT ====================
+class TransdimensionalBot:
+    def __init__(self, id: str = None):
+        self.id = id or str(uuid.uuid4())
+        self.position = np.zeros(4)  # x, y, z, t
+        self.philosopher = DimensionalPhilosophy()
+        self.reality_scanner = RealityMonitor()
+
+    def explore(self, dimension: str) -> dict:
+        system = self.philosopher.generate_system(dimension)
+        validation = self._quantum_validate(system)
+        return {**system, "quantum_validation": validation}
+
+    def _quantum_validate(self, system: dict) -> float:
+        qc = QuantumCircuit(2)
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.measure_all()
+        counts = execute(qc, Aer.get_backend('qasm_simulator'), shots=1024).result().get_counts()
+        return (counts.get("00", 0) + counts.get("11", 0)) / 1024
+
+    def execute_adaptive_command(self, command: str, dimension: str):
+        """Bot adapts and executes a symbolic quantum command."""
+        qsym = QuantumSymbol(command, dimension)
+        measurement = qsym.measure()
+        # simple placeholder: changing position if MOVE detected
+        if command == "MOVE":
+            self.position[:3] += np.random.uniform(-1, 1, 3)
+
+# ==================== SWARM INTELLIGENCE WITH FEEDBACK ====================
+class FractalSwarm:
+    def __init__(self, n_bots=3):
+        self.bots = [TransdimensionalBot() for _ in range(n_bots)]
+        self.reality_map = np.zeros((100, 100))
+        self.fractures = []
+
+    def mapping_cycle(self):
+        dimensions = ["3D", "4D", "5D"]
+        for dim in dimensions:
+            for bot in self.bots:
+                results = bot.explore(dim)
+                self._log_reality_impact(bot, results, dim)
+        self._update_fracture_map()
+        self._feedback_adaptation()  # <-- new dynamic adaptation step
+
+    def _log_reality_impact(self, bot, results, dim):
+        if results["consistency_score"] < 0.5:  # conceptual instability
+            event = FractureEvent(
+                RealityDomain.CONCEPTUAL,
+                tuple(bot.position[:3]),
+                results["quantum_validation"]
+            )
+            self.fractures.append(event)
+
+    def _update_fracture_map(self):
+        for frac in self.fractures:
+            x, y = random.randint(0, 99), random.randint(0, 99)
+            self.reality_map[x, y] += frac.intensity
+
+    def _feedback_adaptation(self):
+        """If fractures detected, adapt bot behaviour immediately."""
+        if not self.fractures:
+            return
+        print(f"[FEEDBACK] {len(self.fractures)} fractures detected — adapting swarm program...")
+        for frac in self.fractures:
+            for bot in self.bots:
+                # Example: if conceptual fracture, try new MOVE in affected dimension
+                bot.execute_adaptive_command("MOVE", "4D")
+
+    def visualize(self):
+        data = np.array([bot.position[:3] for bot in self.bots])
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
+        ax.scatter(data[:,0], data[:,1], data[:,2], c='b', label="Bots")
+        for frac in self.fractures:
+            ax.quiver(*frac.location, *frac.propagation_vector[:3],
+                      length=frac.intensity*10, color='r', label="Fracture")
+        plt.title("Transdimensional Swarm Projection with Fractures")
+        plt.show()
+
+# ==================== DEMO RUN ====================
+if __name__ == "__main__":
+    swarm = FractalSwarm(n_bots=5)
+    print("=== Cycle 1 ===")
+    swarm.mapping_cycle()
+
+    print("\n=== Detected Fractures ===")
+    for i, frac in enumerate(swarm.fractures):
+        print(f"Fracture {i}: {frac.domain.name} at {frac.location} (Intensity={frac.intensity:.3f})")
+
+    swarm.visualize()
+
+    print("\n=== Cycle 2 (Post-Adaptation) ===")
+    swarm.mapping_cycle()
+    swarm.visualize()
