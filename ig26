@@ -1,0 +1,276 @@
+"""
+NeuroSpeech Engine - Biomimetic AGI Speech System
+Author: [Your Name]
+Description:
+Brain-inspired architecture with:
+- Wernicke's area (comprehension)
+- Broca's area (production)
+- Motor cortex (articulation)
+- Arcuate fasciculus (feedback)
+- Limbic system (emotion)
+- Cerebellum (timing)
+"""
+
+import os
+import torch
+import numpy as np
+import asyncio
+import queue
+from enum import Enum, auto
+from dataclasses import dataclass
+from typing import Optional, Dict, Any, List
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+import sounddevice as sd
+import librosa
+import whisper
+from TTS.api import TTS
+from sklearn.metrics.pairwise import cosine_similarity
+
+# -------------------
+# Neural Configuration
+# -------------------
+@dataclass
+class NeuralConfig:
+    # Hardware
+    device: str = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    # Wernicke's Area
+    asr_model: str = "medium"  # Whisper model size
+    semantic_model: str = "facebook/bart-base"  # For intent extraction
+    
+    # Broca's Area  
+    grammar_model: str = "stanfordnlp/constituency-parser"
+    prosody_resolution: int = 10  # Control points per second
+    
+    # Motor Cortex
+    articulatory_model: str = "articulatory/vocal-tract"  # Placeholder
+    cerebellum_time_constant: float = 0.1  # Timing adjustment
+    
+    # Limbic System
+    emotion_embedding_dim: int = 128
+    
+    # Feedback
+    self_monitoring_threshold: float = 0.3  # Error tolerance
+
+# -------------------
+# Core Neural Modules
+# -------------------
+class WernickesArea:
+    """Language comprehension module (semantic extraction + cultural context)"""
+    def __init__(self, config: NeuralConfig):
+        print("[NEURO] Initializing Wernicke's area...")
+        self.asr = whisper.load_model(config.asr_model).to(config.device)
+        self.semantic_model = AutoModelForSeq2SeqLM.from_pretrained(config.semantic_model).to(config.device)
+        self.tokenizer = AutoTokenizer.from_pretrained(config.semantic_model)
+        
+        # Cultural memory (simplified)
+        self.cultural_vectors = np.random.randn(100, 256)  # Pretend embeddings
+        self.cultural_terms = ["idiom_"+str(i) for i in range(100)]
+    
+    async def comprehend(self, audio: np.ndarray) -> Dict[str, Any]:
+        """Audio → Text → Meaning"""
+        # ASR transcription
+        result = self.asr.transcribe(audio)
+        text = result["text"]
+        
+        # Semantic parsing
+        inputs = self.tokenizer(text, return_tensors="pt").to(config.device)
+        with torch.no_grad():
+            outputs = self.semantic_model.generate(**inputs)
+        semantic_parse = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+        
+        # Cultural contextualization
+        cultural_score = self._match_cultural_context(text)
+        
+        return {
+            "text": text,
+            "semantic_parse": semantic_parse,
+            "cultural_relevance": cultural_score
+        }
+    
+    def _match_cultural_context(self, text: str) -> float:
+        """Simple cultural matching (replace with real embeddings)"""
+        tokens = text.lower().split()
+        matches = [t for t in tokens if t in self.cultural_terms]
+        return len(matches) / len(tokens) if tokens else 0.0
+
+class BrocasArea:
+    """Speech production planning (syntax + prosody)"""
+    def __init__(self, config: NeuralConfig):
+        print("[NEURO] Initializing Broca's area...")
+        self.grammar_parser = AutoModelForSeq2SeqLM.from_pretrained(config.grammar_model).to(config.device)
+        self.prosody_grid = np.linspace(0, 1, config.prosody_resolution)
+        
+    async def plan_utterance(self, semantic_input: Dict[str, Any], 
+                           emotion: np.ndarray) -> Dict[str, Any]:
+        """Thought → Structured utterance plan"""
+        # Syntax tree generation
+        parse_input = f"PARSE: {semantic_input['semantic_parse']}"
+        parse_tokens = self.grammar_parser.tokenizer(parse_input, return_tensors="pt").to(config.device)
+        with torch.no_grad():
+            parse_output = self.grammar_parser.generate(**parse_tokens)
+        syntax_tree = self.grammar_parser.tokenizer.decode(parse_output[0])
+        
+        # Prosody contour generation (emotion-aware)
+        base_pitch = 100 + 50 * emotion[0]  # Hz
+        pitch_contour = base_pitch * (1 + 0.5 * np.sin(2*np.pi*self.prosody_grid))
+        
+        return {
+            "syntax_tree": syntax_tree,
+            "prosody": {
+                "pitch": pitch_contour.tolist(),
+                "timing": self._generate_timing(semantic_input, emotion)
+            },
+            "words": self._linearize_syntax(syntax_tree)
+        }
+    
+    def _generate_timing(self, semantic: Dict[str, Any], emotion: np.ndarray) -> List[float]:
+        """Generate syllable durations based on content/emotion"""
+        urgency = 1.0 - emotion[1]  # More urgent for negative emotions
+        return [0.2 * urgency for _ in semantic["text"].split()]
+    
+    def _linearize_syntax(self, tree: str) -> str:
+        """Simplified tree-to-text (replace with real implementation)"""
+        return tree.replace("(S ", "").replace(")", "")
+
+class MotorCortex:
+    """Articulation execution with cerebellar timing"""
+    def __init__(self, config: NeuralConfig):
+        print("[NEURO] Initializing motor cortex...")
+        self.tts = TTS("tts_models/en/ljspeech/vits").to(config.device)
+        self.cerebellar_delay = config.cerebellum_time_constant
+        
+    async def articulate(self, plan: Dict[str, Any]) -> np.ndarray:
+        """Motor plan → Speech waveform"""
+        # Apply cerebellar timing adjustments
+        adjusted_timing = self._apply_cerebellum(plan["prosody"]["timing"])
+        
+        # Generate speech (simplified - real implementation would use articulatory params)
+        audio = self.tts.synthesize(
+            text=plan["words"],
+            speaker="en_au_001",
+            pitch_scale=plan["prosody"]["pitch"][0]/100  # Scale factor
+        )
+        return audio
+    
+    def _apply_cerebellum(self, timings: List[float]) -> List[float]:
+        """Add natural timing variability"""
+        return [t * (1 + self.cerebellar_delay * np.random.randn()) for t in timings]
+
+class ArcuateFasciculus:
+    """Self-monitoring feedback loop"""
+    def __init__(self, config: NeuralConfig):
+        print("[NEURO] Initializing arcuate fasciculus...")
+        self.monitor_asr = whisper.load_model("tiny").to(config.device)
+        self.threshold = config.self_monitoring_threshold
+        
+    async def monitor(self, audio: np.ndarray, expected: str) -> Optional[str]:
+        """Compare produced speech to intended output"""
+        result = self.monitor_asr.transcribe(audio)
+        error = wer(expected, result["text"])
+        
+        if error > self.threshold:
+            return f"Error detected (WER: {error:.2f}). Triggering repair."
+        return None
+
+class LimbicSystem:
+    """Emotion processing subsystem"""
+    def __init__(self, config: NeuralConfig):
+        print("[NEURO] Initializing limbic system...")
+        self.dim = config.emotion_embedding_dim
+        self.state = np.zeros(self.dim)
+        
+    def update_emotion(self, audio_features: np.ndarray) -> np.ndarray:
+        """Update emotional state based on vocal characteristics"""
+        # Simplified emotion vector update
+        pitch = audio_features[0]
+        intensity = audio_features[1]
+        
+        # Valence (positive/negative)
+        self.state[0] = np.tanh(pitch / 500 - 0.5)  
+        # Arousal (calm/excited)
+        self.state[1] = np.tanh(intensity / 0.5)
+        
+        return self.state.copy()
+
+# -------------------
+# Integrated Speech Brain
+# -------------------
+class NeuroSpeechEngine:
+    def __init__(self):
+        self.config = NeuralConfig()
+        self.modules = {
+            "wernicke": WernickesArea(self.config),
+            "broca": BrocasArea(self.config),
+            "motor": MotorCortex(self.config),
+            "arcuate": ArcuateFasciculus(self.config),
+            "limbic": LimbicSystem(self.config)
+        }
+        self.audio_queue = queue.Queue()
+        
+    async def audio_callback(self, indata, frames, time, status):
+        """Real-time audio input handler"""
+        self.audio_queue.put(indata.copy())
+    
+    async def process_cycle(self):
+        """Complete perception→production→feedback loop"""
+        while True:
+            if not self.audio_queue.empty():
+                # 1. Perception (Wernicke's area)
+                audio = self.audio_queue.get()
+                comprehension = await self.modules["wernicke"].comprehend(audio)
+                
+                # 2. Emotion processing (Limbic system)
+                features = self._extract_vocal_features(audio)
+                emotion = self.modules["limbic"].update_emotion(features)
+                
+                # 3. Production planning (Broca's area)
+                plan = await self.modules["broca"].plan_utterance(comprehension, emotion)
+                
+                # 4. Motor execution
+                speech = await self.modules["motor"].articulate(plan)
+                
+                # 5. Self-monitoring
+                feedback = await self.modules["arcuate"].monitor(speech, plan["words"])
+                if feedback:
+                    print(f"[FEEDBACK] {feedback}")
+                    
+                # Play output
+                sd.play(speech, samplerate=16000)
+                
+            await asyncio.sleep(0.01)
+    
+    def _extract_vocal_features(self, audio: np.ndarray) -> np.ndarray:
+        """Basic pitch/intensity extraction"""
+        pitches = librosa.yin(audio, fmin=50, fmax=500)
+        return np.array([
+            np.nanmedian(pitches),  # Pitch median
+            np.mean(audio**2)       # Intensity
+        ])
+
+# -------------------
+# Main Execution
+# -------------------
+async def main():
+    print("""\
+    ███╗   ██╗███████╗██╗   ██╗██████╗ ███████╗██████╗ ███████╗███████╗██╗  ██╗
+    ████╗  ██║██╔════╝██║   ██║██╔══██╗██╔════╝██╔══██╗██╔════╝██╔════╝██║  ██║
+    ██╔██╗ ██║█████╗  ██║   ██║██████╔╝███████╗██████╔╝█████╗  ███████╗███████║
+    ██║╚██╗██║██╔══╝  ██║   ██║██╔═══╝ ╚════██║██╔═══╝ ██╔══╝  ╚════██║██╔══██║
+    ██║ ╚████║███████╗╚██████╔╝██║     ███████║██║     ███████╗███████║██║  ██║
+    ╚═╝  ╚═══╝╚══════╝ ╚═════╝ ╚═╝     ╚══════╝╚═╝     ╚══════╝╚══════╝╚═╝  ╚═╝
+    """)
+    
+    engine = NeuroSpeechEngine()
+    
+    with sd.InputStream(
+        samplerate=16000,
+        channels=1,
+        dtype='float32',
+        callback=engine.audio_callback
+    ):
+        print("[SYSTEM] NeuroSpeech active - speak naturally...")
+        await engine.process_cycle()
+
+if __name__ == "__main__":
+    asyncio.run(main())
