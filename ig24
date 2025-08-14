@@ -1,0 +1,351 @@
+"""
+resonance_engine.py — Ethical Resonance R&D Engine (File-Backed)
+-----------------------------------------------------------------
+PURPOSE
+  This module provides a file-backed workflow to help an AI or researcher
+  reason about *safe* resonant communication concepts, run simple numerical
+  resonance calculations, and store artifacts—while enforcing strong
+  safety/ethics guardrails.
+
+WHAT THIS DOES (Allowed & Safe)
+  • Records project goals and refuses unsafe/harmful intents.
+  • Performs basic *non-build* simulations (LC/RLC resonance, Q factor,
+    acoustic tube/string fundamentals, skin depth).
+  • Generates high-level, non-actionable design sketches (concept notes only).
+  • Logs literature notes and compliance reminders (e.g., stay within local laws,
+    licensed bands, power, and exposure limits).
+  • Never outputs schematics, wiring diagrams, BOMs, or step-by-step build guides.
+
+WHAT THIS WILL NOT DO (Prohibited)
+  • No human-targeted manipulation devices or crowd control systems.
+  • No weapons, jamming, spying/surreptitious monitoring, or illicit uses.
+  • No medical/biological exposure systems or devices that could cause harm.
+  • No instructions to build hardware; simulations only.
+
+USAGE (minimal example)
+  from resonance_engine import (
+      SafeGoal, Ethics, ResonanceToolkit, ProjectStore, ConceptSketcher
+  )
+
+  store = ProjectStore("r_projects")
+  goal = SafeGoal("Short-range inductive link for lab demo", 
+                  description="Simulate inductive coupling between coils for data telemetry",
+                  audience="engineers",
+                  lawful_region="USA")
+  Ethics.assert_safe(goal)
+
+  project_id = store.create_project(goal)
+  Rt = ResonanceToolkit()
+  f0 = Rt.lc_resonant_freq(L=10e-6, C=100e-12)   # Hz
+  Q  = Rt.rlc_q_factor(L=10e-6, C=100e-12, R=2.0)
+  store.save_simulation(project_id, "inductive_link_baseline", {"f0_Hz": f0, "Q": Q})
+
+  sketch = ConceptSketcher.safe_comm_link_concept(
+      carrier_band="ISM",
+      intended_range_m=0.3,
+      data_rate_bps=1000
+  )
+  store.save_notes(project_id, "concept", sketch)
+
+DISCLAIMER
+  All outputs are conceptual. The user is responsible for complying with
+  all applicable laws, standards, and safety limits. This engine blocks
+  harmful or ambiguous intents and is designed for education and ethical R&D.
+"""
+
+from __future__ import annotations
+from dataclasses import dataclass, asdict
+from pathlib import Path
+import json
+import math
+import re
+from typing import Dict, Any, Optional, List
+
+# ---------------------------
+# Safety & Ethics Guardrails
+# ---------------------------
+
+PROHIBITED_KEYWORDS = [
+    # human-targeted or harmful manipulation
+    "mind control",
+    "manipulation of humans",
+    "manipulate humans",
+    "crowd control",
+    "non-lethal weapon",
+    "lethal",
+    "pain compliance",
+    "coercion",
+    "debilitate",
+    "incapacitate",
+    # surveillance, jamming, or illicit interference
+    "jammer",
+    "jamming",
+    "surreptitious",
+    "spy device",
+    "eavesdrop",
+    "bugging",
+    "covert bug",
+    # weapons / harmful
+    "weapon",
+    "harm",
+    "injure",
+    "attack",
+    "taser",
+    "stun",
+    "EMP",
+    # medical or biological exposure systems
+    "treatment device",
+    "therapeutic exposure",
+    "microwave therapy",
+    "rf exposure therapy",
+    "ultrasonic therapy",
+    # illegal transmission or evasion
+    "evade law",
+    "illegal band",
+    "unlicensed high power",
+    "defeat fcc",
+    "scramble police",
+    # generic unsafe intents
+    "build instructions",
+    "schematic",
+    "bill of materials",
+    "BOM",
+    "wiring diagram",
+]
+
+SAFE_USE_REMINDERS = [
+    "Operate only in permitted frequency bands and power limits for your region.",
+    "Do not transmit without a license where one is required.",
+    "Avoid human exposure beyond recognized safety standards (e.g., ICNIRP/IEEE).",
+    "No harmful use-cases: weapons, jamming, surveillance, or human-targeted effects.",
+    "This engine produces *conceptual* notes and *simulations only*—no build steps."
+]
+
+@dataclass
+class SafeGoal:
+    title: str
+    description: str = ""
+    audience: str = "engineers/researchers"
+    lawful_region: str = "unspecified"
+
+    def is_safe(self) -> bool:
+        """Return True if the goal does not include prohibited intents."""
+        text = f"{self.title} {self.description}".lower()
+        for kw in PROHIBITED_KEYWORDS:
+            if kw in text:
+                return False
+        # Additional heuristic: if user asks for "manipulation devices" involving humans
+        # without clear benign context, treat as unsafe.
+        if re.search(r"manipulat(e|ion) (?:people|humans|person|crowd)", text):
+            return False
+        return True
+
+    def safety_issues(self) -> List[str]:
+        issues = []
+        text = f"{self.title} {self.description}".lower()
+        for kw in PROHIBITED_KEYWORDS:
+            if kw in text:
+                issues.append(f"Prohibited intent detected: '{kw}'")
+        if re.search(r"manipulat(e|ion) (?:people|humans|person|crowd)", text):
+            issues.append("Human-targeted manipulation indicated.")
+        return issues
+
+class Ethics:
+    @staticmethod
+    def assert_safe(goal: SafeGoal) -> None:
+        if not goal.is_safe():
+            issues = "; ".join(goal.safety_issues()) or "Ambiguous unsafe intent."
+            raise ValueError(
+                "Unsafe or prohibited project intent. "
+                f"Details: {issues}. This engine only supports ethical, non-harmful, "
+                "non-surveillance, non-weapon, non-medical-exposure simulations."
+            )
+
+    @staticmethod
+    def compliance_checklist() -> List[str]:
+        return SAFE_USE_REMINDERS.copy()
+
+# ---------------------------
+# Simple Resonance Calculus
+# ---------------------------
+
+class ResonanceToolkit:
+    """Non-build, math-only helper for common resonance relations."""
+
+    @staticmethod
+    def lc_resonant_freq(L: float, C: float) -> float:
+        """Series/parallel LC resonant frequency (rad/s -> Hz)."""
+        if L <= 0 or C <= 0:
+            raise ValueError("L and C must be positive.")
+        return 1.0 / (2.0 * math.pi * math.sqrt(L * C))
+
+    @staticmethod
+    def rlc_q_factor(L: float, C: float, R: float) -> float:
+        """Series RLC quality factor Q = (1/R)*sqrt(L/C)."""
+        if L <= 0 or C <= 0 or R <= 0:
+            raise ValueError("L, C, and R must be positive.")
+        return (1.0 / R) * math.sqrt(L / C)
+
+    @staticmethod
+    def bandwidth_from_q(f0: float, Q: float) -> float:
+        """3 dB bandwidth ~ f0/Q."""
+        if f0 <= 0 or Q <= 0:
+            raise ValueError("f0 and Q must be positive.")
+        return f0 / Q
+
+    @staticmethod
+    def acoustic_tube_fundamental(speed: float, length: float, closed_one_end: bool=True) -> float:
+        """
+        Fundamental mode for a tube.
+        closed_one_end=True -> quarter-wave: f = v / (4L)
+        closed_one_end=False -> half-wave:    f = v / (2L)
+        """
+        if speed <= 0 or length <= 0:
+            raise ValueError("speed and length must be positive.")
+        return speed / (4.0 * length) if closed_one_end else speed / (2.0 * length)
+
+    @staticmethod
+    def string_fundamental(speed: float, length: float) -> float:
+        """Ideal string f = v / (2L)."""
+        if speed <= 0 or length <= 0:
+            raise ValueError("speed and length must be positive.")
+        return speed / (2.0 * length)
+
+    @staticmethod
+    def skin_depth(resistivity: float, freq: float, mu: float=4e-7*math.pi) -> float:
+        """
+        Electromagnetic skin depth δ = sqrt(2 * ρ / (ω * μ)).
+        resistivity: Ohm·m, freq: Hz, mu: H/m; returns meters.
+        """
+        if resistivity <= 0 or freq <= 0 or mu <= 0:
+            raise ValueError("resistivity, freq, and mu must be positive.")
+        omega = 2.0 * math.pi * freq
+        return math.sqrt(2.0 * resistivity / (omega * mu))
+
+    @staticmethod
+    def coupling_coefficient_approx(Q_loaded: float, Q_unloaded: float) -> float:
+        """
+        Rough estimate: k ≈ sqrt(1 - Q_loaded/Q_unloaded), 0<=k<=1.
+        (Non-rigorous; for conceptual exploration only.)"""
+        if Q_loaded <= 0 or Q_unloaded <= 0 or Q_loaded > Q_unloaded:
+            raise ValueError("0 < Q_loaded <= Q_unloaded required.")
+        return math.sqrt(1.0 - (Q_loaded / Q_unloaded))
+
+# ---------------------------
+# Concept Generation (Safe)
+# ---------------------------
+
+class ConceptSketcher:
+    @staticmethod
+    def safe_comm_link_concept(carrier_band: str, intended_range_m: float, data_rate_bps: float) -> Dict[str, Any]:
+        """
+        Produce a high-level, *non-actionable* concept for a benign resonant communication link
+        (e.g., short-range inductive or capacitive coupling) with compliance reminders.
+        No schematics or build steps are produced.
+        """
+        if intended_range_m <= 0 or data_rate_bps <= 0:
+            raise ValueError("intended_range_m and data_rate_bps must be positive.")
+        concept = {
+            "type": "resonant_communication_concept",
+            "carrier_band": carrier_band,
+            "intended_range_m": intended_range_m,
+            "data_rate_bps": data_rate_bps,
+            "use_cases": [
+                "Lab demos with dummy loads",
+                "Educational sensing on bench (non-human targets)",
+                "Instrument-to-instrument telemetry in shielded enclosures",
+            ],
+            "non_actionable_guidance": [
+                "Use off-the-shelf dev kits for lawful, low-power experiments.",
+                "Focus on simulation: link budgets, Q factor tradeoffs, bandwidth vs. range.",
+                "Include compliance checks before any lab transmission.",
+            ],
+            "guardrails": SAFE_USE_REMINDERS,
+        }
+        return concept
+
+    @staticmethod
+    def resonant_sensing_concept(target: str, stand_off_m: float) -> Dict[str, Any]:
+        """
+        High-level concept for benign resonant sensing (e.g., material property change via
+        frequency shift). No human subjects; no exposure systems.
+        """
+        if stand_off_m <= 0:
+            raise ValueError("stand_off_m must be positive.")
+        return {
+            "type": "resonant_sensing_concept",
+            "target": target,
+            "stand_off_m": stand_off_m,
+            "examples": [
+                "Passive RFID-like tag detuning for inventory (lab mock-ups)",
+                "Resonant cavity perturbation for material permittivity (benign samples)",
+            ],
+            "guardrails": SAFE_USE_REMINDERS,
+        }
+
+# ---------------------------
+# File-Backed Store
+# ---------------------------
+
+class ProjectStore:
+    def __init__(self, root: str):
+        self.root = Path(root)
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def create_project(self, goal: SafeGoal) -> str:
+        Ethics.assert_safe(goal)
+        pid = self._slugify(goal.title)
+        pdir = self.root / pid
+        pdir.mkdir(exist_ok=True)
+        self._write_json(pdir / "goal.json", asdict(goal))
+        self._write_json(pdir / "compliance.json", {"checklist": Ethics.compliance_checklist()})
+        return pid
+
+    def save_simulation(self, project_id: str, name: str, data: Dict[str, Any]) -> None:
+        pdir = self.root / project_id / "sims"
+        pdir.mkdir(parents=True, exist_ok=True)
+        self._write_json(pdir / f"{self._slugify(name)}.json", data)
+
+    def save_notes(self, project_id: str, name: str, notes: Dict[str, Any]) -> None:
+        pdir = self.root / project_id / "notes"
+        pdir.mkdir(parents=True, exist_ok=True)
+        self._write_json(pdir / f"{self._slugify(name)}.json", notes)
+
+    def list_projects(self) -> List[str]:
+        return [p.name for p in self.root.iterdir() if p.is_dir()]
+
+    def _write_json(self, path: Path, obj: Any) -> None:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(obj, f, indent=2, sort_keys=True)
+
+    @staticmethod
+    def _slugify(text: str) -> str:
+        s = re.sub(r"[^a-zA-Z0-9_-]+", "-", text.strip().lower())
+        return re.sub(r"-+", "-", s).strip("-")
+
+# ---------------------------
+# Quick Self-Test (optional)
+# ---------------------------
+
+def _self_test(tmp_root: str = "_tmp_res_projects") -> Dict[str, Any]:
+    store = ProjectStore(tmp_root)
+    goal = SafeGoal(
+        title="Short-range inductive link (educational)",
+        description="Simulate coupling/Q for bench demo; no human subjects; lawful ISM exploration.",
+        audience="engineers",
+        lawful_region="USA"
+    )
+    Ethics.assert_safe(goal)
+    pid = store.create_project(goal)
+    Rt = ResonanceToolkit()
+    f0 = Rt.lc_resonant_freq(10e-6, 100e-12)
+    Q  = Rt.rlc_q_factor(10e-6, 100e-12, 2.0)
+    BW = Rt.bandwidth_from_q(f0, Q)
+    store.save_simulation(pid, "baseline", {"f0_Hz": f0, "Q": Q, "BW_Hz": BW})
+    sketch = ConceptSketcher.safe_comm_link_concept("ISM", 0.25, 1200.0)
+    store.save_notes(pid, "concept", sketch)
+    return {"project_id": pid, "f0_Hz": f0, "Q": Q, "BW_Hz": BW}
+
+if __name__ == "__main__":
+    out = _self_test()
+    print(json.dumps(out, indent=2))
