@@ -1,0 +1,389 @@
+"""
+Progressive Speech Engine - Biologically-Inspired AGI Prototype
+
+Modules:
+ - Wernicke's Module: ASR + Semantic Extraction + Cultural Memory
+ - Broca's Module: Syntax Planning + Prosody Planning
+ - Motor Cortex Module: Articulatory Synthesis + Prosody Timing (Cerebellum)
+ - Arcuate Fasciculus: Self-Monitoring Feedback Loop
+ - Limbic System: Emotion Embedding Injection
+
+Features:
+ - Real-time streaming audio input
+ - Incremental speech recognition & semantic parsing
+ - Hierarchical utterance planning with prosody control
+ - Neural and articulatory speech synthesis stub
+ - Safety filters & RLHF-ready replay buffer
+
+Author: Your Name
+"""
+
+import os
+import tempfile
+import asyncio
+import queue
+from datetime import datetime
+from collections import deque
+from enum import Enum, auto
+from typing import Optional, Dict, Any
+
+import torch
+import numpy as np
+import sounddevice as sd
+import whisper
+from TTS.api import TTS
+from jiwer import wer
+from transformers import pipeline
+import librosa
+
+
+# -------------------
+# CONFIG
+# -------------------
+class Config:
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+    ASR_MODEL_NAME = "small"  # Whisper model size
+    TTS_MODEL_NAME = "tts_models/en/ljspeech/vits"
+    TTS_VOICE_ID = "en_au_001"
+    REPLAY_BUFFER_SIZE = 1000
+    SAMPLE_RATE = 16000
+    MAX_RESPONSE_TOKENS = 80
+    CHUNK_DURATION_MS = 500
+    SAFETY_FILTERS = True
+    EMOTION_VECTOR_DIM = 16
+    ERROR_THRESHOLD = 0.15  # Example WER threshold for triggering repair
+
+
+# -------------------
+# Brain Region Modules
+# -------------------
+
+class CulturalMemory:
+    """Vector-space cultural knowledge storage and retrieval (stub)."""
+
+    def __init__(self):
+        self.memory_store = {}  # Placeholder for vector store
+
+    def contextualize(self, semantic_rep):
+        # In real system: perform vector search for cultural context augmentation
+        return semantic_rep  # Stub: return input for now
+
+
+class WernickesModule:
+    """Language comprehension: ASR + semantic extraction + cultural context."""
+
+    def __init__(self):
+        print("[Wernicke] Initializing ASR model...")
+        self.asr = whisper.load_model(Config.ASR_MODEL_NAME).to(Config.DEVICE)
+        print("[Wernicke] Initializing cultural memory...")
+        self.culture = CulturalMemory()
+
+    def transcribe(self, audio_path: str) -> str:
+        print("[Wernicke] Transcribing audio...")
+        result = self.asr.transcribe(audio_path)
+        text = result["text"]
+        print(f"[Wernicke] Raw transcription: {text}")
+        return text
+
+    def _extract_semantics(self, text: str) -> Dict[str, Any]:
+        # Stub: semantic parsing & intent classification (could use transformer NLP model)
+        print("[Wernicke] Extracting semantics from text...")
+        semantics = {"text": text, "intent": "general", "entities": []}
+        return semantics
+
+    def comprehend(self, audio_path: str) -> Dict[str, Any]:
+        words = self.transcribe(audio_path)
+        semantics = self._extract_semantics(words)
+        enriched = self.culture.contextualize(semantics)
+        print(f"[Wernicke] Enriched semantics: {enriched}")
+        return enriched
+
+
+class ProsodyPlanner:
+    """Plan pitch, stress, and duration contours for utterance."""
+
+    def add_contours(self, syntactic_frame) -> Dict[str, Any]:
+        # Stub: attach prosodic markers based on syntax and emotion
+        print("[ProsodyPlanner] Adding prosodic contours...")
+        prosody_frame = {
+            "syntax": syntactic_frame,
+            "pitch_contour": [100, 110, 105, 100],  # Hz example
+            "stress_pattern": [0, 1, 0, 0],
+            "duration_ms": [100, 150, 120, 100]
+        }
+        return prosody_frame
+
+
+class BrocasModule:
+    """Speech motor planning, grammar/syntax structuring & prosody planning."""
+
+    def __init__(self):
+        print("[Broca] Initializing grammar constraints and prosody planner...")
+        self.syntax_rules = self._load_grammar_constraints()
+        self.prosody_planner = ProsodyPlanner()
+
+    def _load_grammar_constraints(self):
+        # Simplified Chomsky-esque rules (stub)
+        print("[Broca] Loading grammar constraints...")
+        return {"S": ["NP VP"], "NP": ["Det N"], "VP": ["V NP"]}
+
+    def _build_syntax_tree(self, semantics):
+        # Stub: convert semantic intent to a simple syntax frame (list of phrases)
+        print("[Broca] Building syntax tree from semantics...")
+        if "text" in semantics:
+            words = semantics["text"].split()
+            syntax_tree = {
+                "sentence": semantics["text"],
+                "phrases": [["NP", words[0]]] if words else [],
+            }
+            return syntax_tree
+        return {}
+
+    def plan_utterance(self, semantic_intent):
+        print("[Broca] Planning utterance...")
+        syntactic_frame = self._build_syntax_tree(semantic_intent)
+        prosody_struct = self.prosody_planner.add_contours(syntactic_frame)
+        return prosody_struct
+
+
+class ArticulatorySynthesis:
+    """Generate speech waveform from motor plans (stub for articulatory synthesis)."""
+
+    def execute(self, timed_params) -> str:
+        print("[Motor Cortex] Executing articulatory synthesis...")
+        # Here would be an articulatory synthesis engine; for now return stub audio path
+        synthetic_audio_path = os.path.join(tempfile.gettempdir(), "synthesized_speech.wav")
+        # Generate silent wav as placeholder
+        sample_rate = Config.SAMPLE_RATE
+        duration_s = 2
+        silent_audio = np.zeros(int(sample_rate * duration_s))
+        librosa.output.write_wav(synthetic_audio_path, silent_audio, sample_rate)
+        print("[Motor Cortex] Returning synthetic audio path (stub)")
+        return synthetic_audio_path
+
+
+class ProsodyTimer:
+    """Fine-tune rhythm/timing of speech."""
+
+    def add_rhythm(self, articulatory_params):
+        print("[Cerebellum] Adding timing and rhythm adjustments...")
+        # Stub: timing control - modify durations slightly
+        timed_params = articulatory_params.copy()  # pretend deep copy
+        # Add small random timing variation
+        return timed_params
+
+
+class MotorCortexModule:
+    """Precise articulation motor control + timing."""
+
+    def __init__(self):
+        print("[Motor Cortex] Initializing modules...")
+        self.articulatory_model = ArticulatorySynthesis()
+        self.cerebellum = ProsodyTimer()
+
+    def _plan_to_articulators(self, phoneme_plan):
+        print("[Motor Cortex] Translating phoneme plan to articulatory parameters...")
+        # Stub: converts phonemes to muscle movement parameters
+        return {"phonemes": phoneme_plan}
+
+    def articulate(self, phoneme_plan):
+        articulatory_params = self._plan_to_articulators(phoneme_plan)
+        timed_params = self.cerebellum.add_rhythm(articulatory_params)
+        wave_path = self.articulatory_model.execute(timed_params)
+        return wave_path
+
+
+class PredictionErrorModel:
+    """Compare expected vs perceived outputs."""
+
+    def compare(self, perceived_text, expected_text) -> float:
+        error = wer(expected_text, perceived_text)
+        print(f"[SelfMonitoring] Prediction error (WER): {error:.3f}")
+        return error
+
+
+class SelfMonitoring:
+    """Self-monitoring feedback loop with internal ASR + error checking."""
+
+    def __init__(self):
+        print("[SelfMonitoring] Initializing lightweight internal ASR...")
+        # Lightweight model stub: reuse main ASR for demonstration
+        self.internal_asr = whisper.load_model("tiny").to(Config.DEVICE)
+        self.error_detector = PredictionErrorModel()
+        self.expected = None  # Expected utterance text to compare against
+
+    def set_expected(self, text):
+        self.expected = text.strip()
+
+    def monitor(self, audio_path: str):
+        print("[SelfMonitoring] Monitoring output audio for errors...")
+        perceived_res = self.internal_asr.transcribe(audio_path)
+        perceived = perceived_res.get("text", "").strip()
+        if self.expected:
+            error = self.error_detector.compare(perceived, self.expected)
+            if error > Config.ERROR_THRESHOLD:
+                print("[SelfMonitoring] High error detected! Triggering repair sequence...")
+                self._trigger_repair_sequence()
+            else:
+                print("[SelfMonitoring] Output speech OK.")
+        else:
+            print("[SelfMonitoring] No expected text set; skipping error check.")
+
+    def _trigger_repair_sequence(self):
+        # Placeholder: signal Broca's Module to replan or repair utterance
+        print("[SelfMonitoring] Repair sequence triggered (stub).")
+
+
+class EmotionEmbeddingInjector:
+    """Inject affective/emotion vectors to influence speech."""
+
+    def __init__(self):
+        print("[Limbic] Initializing emotion embedding injector...")
+        # Placeholder for emotion embedding lookup or generation
+        self.current_emotion = np.zeros(Config.EMOTION_VECTOR_DIM)
+
+    def set_emotion(self, emotion_label: str):
+        print(f"[Limbic] Setting emotion: {emotion_label}")
+        # Map emotion label to vector (stub with random)
+        emotions = {"neutral": 0, "joy": 1, "sad": 2, "anger": 3}
+        vec = np.zeros(Config.EMOTION_VECTOR_DIM)
+        idx = emotions.get(emotion_label.lower(), 0)
+        vec[idx] = 1
+        self.current_emotion = vec
+
+    def inject(self, broca_module: BrocasModule, motor_module: MotorCortexModule):
+        print("[Limbic] Injecting emotion embedding into Broca's and Motor Cortex...")
+        # Stub: this would modify internal planning and motor execution parameters accordingly
+        # e.g. change pitch contour, word choice tone
+        pass
+
+
+# -------------------
+# Central AGI Speech Engine Coordinator
+# -------------------
+
+class EngineState(Enum):
+    IDLE = auto()
+    LISTENING = auto()
+    PROCESSING = auto()
+    SPEAKING = auto()
+
+
+class ProgressiveSpeechEngine:
+    def __init__(self):
+        self.state = EngineState.IDLE
+        self.audio_queue = queue.Queue()
+        self.replay_buffer = deque(maxlen=Config.REPLAY_BUFFER_SIZE)
+
+        print("[Engine] Initializing brain-inspired modules...")
+        self.wernicke = WernickesModule()
+        self.broca = BrocasModule()
+        self.motor_cortex = MotorCortexModule()
+        self.self_monitoring = SelfMonitoring()
+        self.limbic = EmotionEmbeddingInjector()
+
+        # TTS as fallback / final waveform generation
+        print("[Engine] Loading neural TTS model...")
+        self.tts = TTS(Config.TTS_MODEL_NAME)
+
+        if Config.SAFETY_FILTERS:
+            self.toxicity_filter = pipeline(
+                "text-classification",
+                model="unitary/toxic-bert",
+                device=Config.DEVICE,
+            )
+
+    async def audio_callback(self, indata, frames, time, status):
+        if self.state == EngineState.LISTENING:
+            self.audio_queue.put(indata.copy())
+
+    async def process_audio_chunk(self, audio_chunk: np.ndarray):
+        temp_file = os.path.join(tempfile.gettempdir(), f"chunk_{datetime.now().timestamp()}.wav")
+        librosa.output.write_wav(temp_file, audio_chunk.flatten(), sr=Config.SAMPLE_RATE)
+
+        # Step 1: Comprehension (Wernicke's Module)
+        semantics = self.wernicke.comprehend(temp_file)
+
+        # Step 2: Planning (Broca's Module)
+        prosody_plan = self.broca.plan_utterance(semantics)
+
+        # Step 3: Limbic injection of emotional tone
+        self.limbic.inject(self.broca, self.motor_cortex)
+
+        # Step 4: Articulation (Motor Cortex)
+        phoneme_plan = prosody_plan.get("syntax", {}).get("phrases", [])  # Stub extraction
+        output_audio_path = self.motor_cortex.articulate(phoneme_plan)
+
+        # Step 5: Self-Monitoring (Arcuate Feedback)
+        self.self_monitoring.set_expected(semantics.get("text", ""))
+        self.self_monitoring.monitor(output_audio_path)
+
+        # Step 6: Safety filtering on planned text (simplified)
+        planned_text = semantics.get("text", "").strip()
+        if Config.SAFETY_FILTERS:
+            toxicity = self.toxicity_filter(planned_text)[0]
+            if toxicity["label"] == "toxic":
+                print("[Engine] Detected toxic content, suppressing response.")
+                output_audio_path = None
+
+        # Optional fallback to neural TTS if articulation stub is silent
+        if output_audio_path is None:
+            fallback_path = os.path.join(tempfile.gettempdir(), "tts_fallback.wav")
+            self.tts.tts_to_file(planned_text, fallback_path, speaker=Config.TTS_VOICE_ID)
+            output_audio_path = fallback_path
+
+        # Step 7: Play synthesized output audio
+        if output_audio_path:
+            y, sr = librosa.load(output_audio_path, sr=None)
+            sd.play(y, sr)
+            sd.wait()
+
+        # Log interaction for RLHF/replay buffer
+        self.log_interaction({
+            "input_semantics": semantics,
+            "prosody_plan": prosody_plan,
+            "output_audio": output_audio_path
+        })
+
+    async def process_audio_stream(self):
+        while True:
+            if not self.audio_queue.empty():
+                chunk = self.audio_queue.get()
+                await self.process_audio_chunk(chunk)
+            else:
+                await asyncio.sleep(0.01)
+
+    def log_interaction(self, metadata: Optional[Dict] = None):
+        entry = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "metadata": metadata or {},
+        }
+        self.replay_buffer.append(entry)
+        print(f"[Engine] Replay buffer size: {len(self.replay_buffer)}")
+
+    async def run(self):
+        print("[Engine] Starting progressive speech engine...")
+        with sd.InputStream(
+            samplerate=Config.SAMPLE_RATE,
+            channels=1,
+            dtype='float32',
+            callback=self.audio_callback
+        ):
+            while True:
+                cmd = await asyncio.to_thread(input, "\nType ENTER to speak, Q to quit: ").strip().lower()
+                if cmd == "q":
+                    break
+                self.state = EngineState.LISTENING
+                print("[Engine] Listening...")
+                await self.process_audio_stream()
+                self.state = EngineState.IDLE
+                print("[Engine] Waiting for next input...")
+
+
+
+# -------------------
+# Main Entry Point
+# -------------------
+if __name__ == "__main__":
+    engine = ProgressiveSpeechEngine()
+    asyncio.run(engine.run())
