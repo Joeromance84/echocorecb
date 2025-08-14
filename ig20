@@ -1,0 +1,17 @@
+class ClarificationManager:
+    def __init__(self):
+        self.uncertainty_detector = QuantumUncertaintyScanner()
+        self.clarification_strategies = {
+            'conceptual': ConceptualRefiner(),
+            'emotional': AffectiveCalibrator(),
+            'temporal': TimelineResolver()
+        }
+        
+    def request_clarification(self, confusion_point: Dict) -> str:
+        """Quantum-analyzes confusion and generates targeted questions"""
+        # Measure confusion type through quantum tomography
+        confusion_type = self.uncertainty_detector.classify(confusion_point)
+        
+        # Select optimal clarification strategy
+        strategy = self.clarification_strategies[confusion_type]
+        return strategy.generate_question(confusion_point)
