@@ -1,0 +1,145 @@
+import random
+from typing import List, Dict, Optional
+
+# ---------------- Framework / Platform Validators ----------------
+class BaseValidator:
+    """Base interface for platform-specific code validation."""
+    def validate(self, code: str) -> List[str]:
+        """Returns list of error/warning messages (empty if valid)."""
+        raise NotImplementedError
+
+class AndroidValidator(BaseValidator):
+    def validate(self, code: str) -> List[str]:
+        errors = []
+        if "public class" not in code and "class " not in code:
+            errors.append("Missing Java/Kotlin class definition.")
+        if "onCreate" not in code:
+            errors.append("Missing onCreate lifecycle method.")
+        return errors
+
+class GitHubWorkflowValidator(BaseValidator):
+    def validate(self, code: str) -> List[str]:
+        errors = []
+        if "name:" not in code:
+            errors.append("Workflow missing 'name' field.")
+        if "jobs:" not in code:
+            errors.append("Workflow missing 'jobs' definition.")
+        return errors
+
+class PythonValidator(BaseValidator):
+    def validate(self, code: str) -> List[str]:
+        errors = []
+        if "def " not in code:
+            errors.append("No function definitions detected.")
+        if not code.strip().endswith("\n") and not code.strip().endswith(")"):
+            errors.append("Possibly incomplete code block.")
+        return errors
+
+# ---------------- Validator Manager ----------------
+class CodeValidatorManager:
+    def __init__(self):
+        self.validators = {
+            "android": AndroidValidator(),
+            "github_workflow": GitHubWorkflowValidator(),
+            "python": PythonValidator()
+        }
+        self.active_platform = "python"  # default
+
+    def set_platform(self, platform: str):
+        if platform in self.validators:
+            self.active_platform = platform
+            print(f"[Validator] Active platform set to: {platform}")
+        else:
+            raise ValueError(f"No validator registered for platform '{platform}'")
+
+    def validate_code(self, code: str) -> List[str]:
+        validator = self.validators[self.active_platform]
+        errors = validator.validate(code)
+        if errors:
+            print(f"[Validator] Found {len(errors)} issue(s).")
+        else:
+            print("[Validator] No issues found.")
+        return errors
+
+# ---------------- Code Generation Engine ----------------
+class CodeSnippetMemory:
+    def __init__(self):
+        self.snippets = {
+            "sort": [
+                "def quicksort(arr):\n    if len(arr) <= 1: return arr\n    pivot = arr[len(arr) // 2]\n    left = [x for x in arr if x < pivot]\n    middle = [x for x in arr if x == pivot]\n    right = [x for x in arr if x > pivot]\n    return quicksort(left) + middle + quicksort(right)"
+            ],
+            "android_activity": [
+                "public class MainActivity extends AppCompatActivity {\n    @Override\n    protected void onCreate(Bundle savedInstanceState) {\n        super.onCreate(savedInstanceState);\n        setContentView(R.layout.activity_main);\n    }\n}"
+            ],
+            "github_workflow": [
+                "name: CI\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n    - uses: actions/checkout@v2"
+            ]
+        }
+
+    def search_snippets(self, keyword: str, max_results=1) -> List[str]:
+        return self.snippets.get(keyword, [])[:max_results]
+
+class CodeGenerationEngine:
+    def __init__(self, memory: CodeSnippetMemory, validator_manager: CodeValidatorManager):
+        self.memory = memory
+        self.validator_manager = validator_manager
+
+    def generate_code(self, task_description: str) -> str:
+        print(f"[CodeGen] Generating code for: '{task_description}'")
+        # crude keyword match
+        for key in self.memory.snippets.keys():
+            if key in task_description.lower():
+                snippet = random.choice(self.memory.snippets[key])
+                return snippet
+        return "# TODO: Implement logic\npass"
+
+    def validate_and_improve(self, code: str) -> str:
+        errors = self.validator_manager.validate_code(code)
+        if not errors:
+            return code
+        print("[CodeGen] Improving code to fix errors...")
+        for err in errors:
+            code += f"\n# FIX: {err}"
+        return code
+
+# ---------------- Integration with Atlas Intelligence ----------------
+class AtlasWithResonantCodeEngine:
+    def __init__(self, atlas_intelligence, code_engine: CodeGenerationEngine):
+        self.atlas = atlas_intelligence
+        self.codegen = code_engine
+
+    def reasoning_coding_validation_cycle(self, task_description: str):
+        print("\n=== Resonant Network Code Cycle ===")
+        self.atlas.reasoning_cycle()
+
+        code = self.codegen.generate_code(task_description)
+        print("\n[Generated Code]\n", code)
+
+        improved_code = self.codegen.validate_and_improve(code)
+        print("\n[Improved Code]\n", improved_code)
+
+# ---------------- Demo ----------------
+if __name__ == "__main__":
+    # Dummy Atlas stub
+    class DummyAtlas:
+        def reasoning_cycle(self): print("[Atlas] Running reasoning...")
+
+    atlas = DummyAtlas()
+
+    # Setup system
+    validator_manager = CodeValidatorManager()
+    snippet_mem = CodeSnippetMemory()
+    code_engine = CodeGenerationEngine(snippet_mem, validator_manager)
+    resonant_atlas = AtlasWithResonantCodeEngine(atlas, code_engine)
+
+    # Example 1: Python
+    validator_manager.set_platform("python")
+    resonant_atlas.reasoning_coding_validation_cycle("Write python code for sort")
+
+    # Example 2: Android
+    validator_manager.set_platform("android")
+    resonant_atlas.reasoning_coding_validation_cycle("Basic android_activity")
+
+    # Example 3: GitHub workflow
+    validator_manager.set_platform("github_workflow")
+    resonant_atlas.reasoning_coding_validation_cycle("Create github_workflow for build")
