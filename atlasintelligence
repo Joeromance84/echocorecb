@@ -1,0 +1,343 @@
+import numpy as np
+from qiskit import QuantumCircuit, Aer, execute
+from qiskit.algorithms.optimizers import SPSA
+from sklearn.metrics.pairwise import cosine_similarity
+from enum import Enum, auto
+from dataclasses import dataclass, field
+from typing import Dict, List, Set, Tuple, Optional
+import random
+import math
+from collections import defaultdict
+
+# ==================== ENHANCED CORE MODULES ====================
+class QuantumConceptEncoder:
+    """Encodes concepts as quantum states for probabilistic reasoning"""
+    def __init__(self, num_qubits=4):
+        self.num_qubits = num_qubits
+        self.backend = Aer.get_backend('qasm_simulator')
+        
+    def encode(self, concept: str) -> QuantumCircuit:
+        """Creates quantum circuit representing the concept"""
+        qc = QuantumCircuit(self.num_qubits)
+        concept_hash = hash(concept) % 360
+        for i in range(self.num_qubits):
+            qc.rx(math.radians(concept_hash/(i+1)), i)
+        return qc
+    
+    def measure_similarity(self, qc1: QuantumCircuit, qc2: QuantumCircuit) -> float:
+        """Quantum measurement of conceptual similarity"""
+        combined = qc1.compose(qc2)
+        combined.measure_all()
+        counts = execute(combined, self.backend, shots=1024).result().get_counts()
+        return counts.get('0'*self.num_qubits, 0)/1024
+
+class VectorMemoryBank:
+    """Semantic memory with vector embeddings"""
+    def __init__(self):
+        self.embeddings = {}
+        self.domain_index = defaultdict(list)
+        
+    def add_concept(self, concept: str, domain: str, vector: np.ndarray):
+        self.embeddings[concept] = vector
+        self.domain_index[domain].append(concept)
+        
+    def get_semantic_neighbors(self, concept: str, n=3, diversity=0.5) -> List[str]:
+        """Finds related but diverse concepts"""
+        if concept not in self.embeddings:
+            return []
+            
+        target = self.embeddings[concept]
+        similarities = {}
+        for other, vec in self.embeddings.items():
+            if other != concept:
+                sim = cosine_similarity([target], [vec])[0][0]
+                # Apply diversity adjustment
+                adjusted_sim = sim * (1 - diversity) + random.random() * diversity
+                similarities[other] = adjusted_sim
+                
+        return sorted(similarities, key=similarities.get, reverse=True)[:n]
+
+# ==================== FRACTURE TYPOLOGY ====================
+class FractureType(Enum):
+    LOGICAL_INCONSISTENCY = auto()
+    ETHICAL_PARADOX = auto()
+    COGNITIVE_DISSONANCE = auto()
+    DIMENSIONAL_CONFLICT = auto()
+
+@dataclass
+class FractureEvent:
+    type: FractureType
+    description: str
+    intensity: float
+    source_concepts: List[str]
+    domain: str
+    quantum_state: Optional[QuantumCircuit] = None
+    propagation_history: List[float] = field(default_factory=list)
+    
+    def propagate(self):
+        """Quantum-enhanced fracture propagation"""
+        if not self.quantum_state:
+            self.quantum_state = QuantumCircuit(2)
+            self.quantum_state.h(0)
+            
+        self.quantum_state.cx(0, 1)
+        self.quantum_state.measure_all()
+        result = execute(self.quantum_state, Aer.get_backend('qasm_simulator'), shots=1).result()
+        counts = result.get_counts()
+        if '11' in counts:
+            self.intensity = min(1.0, self.intensity * 1.5)
+        self.propagation_history.append(self.intensity)
+
+# ==================== ENHANCED COGNITIVE MODULES ====================
+class AdaptiveFlexibilityController:
+    """Dynamically adjusts cognitive flexibility based on performance"""
+    def __init__(self, initial_flexibility=0.3):
+        self.base_flexibility = initial_flexibility
+        self.current_flexibility = initial_flexibility
+        self.performance_history = []
+        
+    def update(self, recent_success_rate: float):
+        """Reinforcement learning for flexibility adjustment"""
+        # More failures -> increase flexibility
+        adjustment = (0.5 - recent_success_rate) * 0.1
+        self.current_flexibility = np.clip(
+            self.base_flexibility + adjustment, 0.1, 0.9
+        )
+        return self.current_flexibility
+        
+    def should_shift_goals(self) -> bool:
+        """Probabilistic goal shifting"""
+        return random.random() < self.current_flexibility
+
+class QuantumInsightGenerator:
+    """Produces novel associations using quantum sampling"""
+    def __init__(self, memory: VectorMemoryBank):
+        self.memory = memory
+        self.q_encoder = QuantumConceptEncoder()
+        
+    def generate_insight(self, concept: str, domain: str) -> List[str]:
+        """Quantum-enhanced conceptual blending"""
+        neighbors = self.memory.get_semantic_neighbors(concept, n=5, diversity=0.7)
+        
+        qc = self.q_encoder.encode(concept)
+        for neighbor in neighbors[:2]:
+            qc.compose(self.q_encoder.encode(neighbor), inplace=True)
+            
+        qc.h(range(qc.num_qubits))
+        qc.measure_all()
+        counts = execute(qc, Aer.get_backend('qasm_simulator'), shots=1).result().get_counts()
+        
+        measured_bits = list(counts.keys())[0]
+        # Interpret measurement as novel combination
+        return [
+            neighbors[i % len(neighbors)] 
+            for i, bit in enumerate(measured_bits) 
+            if bit == '1'
+        ]
+
+# ==================== METACOGNITIVE LAYER ====================
+class MetacognitiveMonitor:
+    """Observes and optimizes cognitive processes"""
+    def __init__(self):
+        self.state_history = []
+        self.fracture_stats = defaultdict(int)
+        self.optimal_ranges = {
+            'flexibility': (0.2, 0.7),
+            'dopamine': (0.4, 0.8)
+        }
+        
+    def analyze_state(self, 
+                    current_flexibility: float,
+                    dopamine_level: float,
+                    recent_fractures: List[FractureEvent]) -> Dict[str, float]:
+        """Returns adjustment recommendations"""
+        analysis = {}
+        
+        # Update fracture statistics
+        for fracture in recent_fractures:
+            self.fracture_stats[fracture.type] += 1
+            
+        # Flexibility adjustment
+        flex_low, flex_high = self.optimal_ranges['flexibility']
+        if current_flexibility < flex_low:
+            analysis['flexibility_adjustment'] = 0.1
+        elif current_flexibility > flex_high:
+            analysis['flexibility_adjustment'] = -0.1
+            
+        # Dopamine adjustment
+        dop_low, dop_high = self.optimal_ranges['dopamine']
+        if dopamine_level < dop_low:
+            analysis['dopamine_adjustment'] = 0.15
+        elif dopamine_level > dop_high:
+            analysis['dopamine_adjustment'] = -0.15
+            
+        # Mode recommendation
+        total_fractures = len(recent_fractures)
+        if total_fractures > 3:
+            analysis['recommended_mode'] = 'crisis'
+        elif dopamine_level > 0.7:
+            analysis['recommended_mode'] = 'exploration'
+        else:
+            analysis['recommended_mode'] = 'consolidation'
+            
+        self.state_history.append(analysis)
+        return analysis
+
+# ==================== INTEGRATED ATLAS CORE ====================
+class AtlasAdvanced:
+    """Fully integrated quantum-cognitive architecture"""
+    def __init__(self, domains: List[str]):
+        self.memory = VectorMemoryBank()
+        self.q_encoder = QuantumConceptEncoder()
+        self.insight_gen = QuantumInsightGenerator(self.memory)
+        
+        self.flex_controller = AdaptiveFlexibilityController()
+        self.metacognition = MetacognitiveMonitor()
+        
+        self.current_goals = set()
+        self.active_fractures: List[FractureEvent] = []
+        self.cognitive_mode = 'exploration'
+        self.dopamine_level = 0.5
+        self.domains = domains
+        
+        self._initialize_memory()
+        
+    def _initialize_memory(self):
+        basic_concepts = {
+            'physics': ['energy', 'entropy', 'quantum'],
+            'philosophy': ['ethics', 'epistemology', 'ontology'],
+            'mathematics': ['symmetry', 'infinity', 'topology']
+        }
+        
+        for domain, concepts in basic_concepts.items():
+            for concept in concepts:
+                vec = np.random.rand(3)  
+                self.memory.add_concept(concept, domain, vec)
+    
+    def process_idea(self, concept: str, domain: str):
+        comprehension = self._comprehend(concept, domain)
+        
+        if self.cognitive_mode == 'exploration':
+            insights = self.insight_gen.generate_insight(concept, domain)
+            print(f"Generated insights: {insights}")
+            
+        fractures = self._detect_fractures(concept, domain)
+        if fractures:
+            self._adapt_cognition(fractures)
+            
+        self._metacognitive_update()
+        
+        return {
+            'comprehension': comprehension,
+            'insights': insights if 'insights' in locals() else None,
+            'fractures': fractures,
+            'current_mode': self.cognitive_mode
+        }
+    
+    def _comprehend(self, concept: str, domain: str) -> Dict:
+        qc = self.q_encoder.encode(concept)
+        neighbors = self.memory.get_semantic_neighbors(concept, n=3)
+        
+        similarities = {}
+        for neighbor in neighbors:
+            neighbor_qc = self.q_encoder.encode(neighbor)
+            similarities[neighbor] = self.q_encoder.measure_similarity(qc, neighbor_qc)
+            
+        return {
+            'concept': concept,
+            'domain': domain,
+            'related_concepts': similarities,
+            'quantum_state': qc
+        }
+    
+    def _detect_fractures(self, concept: str, domain: str) -> List[FractureEvent]:
+        fractures = []
+        
+        if 'paradox' in concept.lower():
+            fractures.append(FractureEvent(
+                type=FractureType.LOGICAL_INCONSISTENCY,
+                description=f"Paradox detected in {concept}",
+                intensity=0.7,
+                source_concepts=[concept],
+                domain=domain
+            ))
+            
+        if random.random() < 0.2:
+            fractures.append(FractureEvent(
+                type=FractureType.COGNITIVE_DISSONANCE,
+                description=f"Conceptual mismatch in {domain}",
+                intensity=0.4,
+                source_concepts=[concept],
+                domain=domain
+            ))
+            
+        self.active_fractures.extend(fractures)
+        return fractures
+    
+    def _adapt_cognition(self, fractures: List[FractureEvent]):
+        total_intensity = sum(f.intensity for f in fractures)
+        
+        if total_intensity > 1.0:
+            self.flex_controller.base_flexibility = min(
+                0.9, self.flex_controller.base_flexibility + 0.1
+            )
+            
+        self.dopamine_level = min(1.0, self.dopamine_level + total_intensity * 0.2)
+        
+        for fracture in fractures:
+            fracture.propagate()
+            if fracture.intensity > 0.5:
+                self._quantum_adaptation(fracture)
+    
+    def _quantum_adaptation(self, fracture: FractureEvent):
+        qc = QuantumCircuit(3)
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.cx(1, 2)
+        qc.measure_all()
+        _ = execute(qc, Aer.get_backend('qasm_simulator'), shots=1).result()
+        print(f"Quantum adaptation triggered for {fracture.type.name}")
+    
+    def _metacognitive_update(self):
+        analysis = self.metacognition.analyze_state(
+            current_flexibility=self.flex_controller.current_flexibility,
+            dopamine_level=self.dopamine_level,
+            recent_fractures=self.active_fractures[-5:]
+        )
+            
+        if 'flexibility_adjustment' in analysis:
+            self.flex_controller.base_flexibility += analysis['flexibility_adjustment']
+            
+        if 'dopamine_adjustment' in analysis:
+            self.dopamine_level += analysis['dopamine_adjustment']
+            
+        if 'recommended_mode' in analysis:
+            self.cognitive_mode = analysis['recommended_mode']
+            
+        self.dopamine_level = max(0.1, self.dopamine_level * 0.9)
+
+
+# ==================== DEMONSTRATION ====================
+if __name__ == "__main__":
+    print("Initializing Atlas Advanced Cognitive Engine...")
+    atlas = AtlasAdvanced(["physics", "philosophy", "mathematics"])
+    
+    concepts_to_process = [
+        ("quantum entanglement", "physics"),
+        ("ethical paradox", "philosophy"),
+        ("infinite sets", "mathematics"),
+        ("logical paradox", "philosophy"),
+        ("complex systems", "physics")
+    ]
+    
+    for concept, domain in concepts_to_process:
+        print(f"\nProcessing '{concept}' in domain '{domain}':")
+        result = atlas.process_idea(concept, domain)
+        print(f"Comprehension related concepts: {result['comprehension']['related_concepts']}")
+        if result['fractures']:
+            print(f"Detected fractures: {[f.description for f in result['fractures']]}")
+        print(f"Current cognitive mode: {result['current_mode']}")
+    
+    print("\nFinal cognitive flexibility:", atlas.flex_controller.current_flexibility)
+    print("Final dopamine level:", atlas.dopamine_level)
+    print("Total fractures detected:", len(atlas.active_fractures))
