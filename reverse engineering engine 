@@ -1,0 +1,601 @@
+# heliosre/__init__.py
+__all__ = ["engine", "cli", "config"]
+__version__ = "0.1.0"
+
+
+# heliosre/config.py
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
+
+@dataclass
+class HeliosConfig:
+    workdir: Path
+    timeout_sec: int = 30
+    max_memory_mb: int = 1024
+    enable_ml: bool = True
+    collab_url: Optional[str] = None
+
+
+# heliosre/engine.py
+from pathlib import Path
+from typing import Optional
+from .config import HeliosConfig
+from .plugins.registry import PluginRegistry
+from .arch.base import ArchitectureHandler
+from .static.disasm import StaticDisassembler
+from .static.xref import CrossRefAnalyzer
+from .static.decompilation import DecompilationPipeline
+from .dynamic.sandbox import SecureSandbox
+from .dynamic.tracer import RuntimeTracer
+from .fuzzing.fuzzer import CoverageGuidedFuzzer
+from .symbolic.executor import AdvancedSymbolicExecutor
+from .anti.anti_analysis import AntiAnalysisDetector
+from .ml.service import MLService
+from .utils.graph import GraphReporter
+from .utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+class ReverseEngineeringEngine:
+    def __init__(self, target: str, *, arch: str | None = None, config: Optional[HeliosConfig] = None):
+        self.target = Path(target)
+        self.arch = arch
+        self.config = config or HeliosConfig(workdir=Path('./helios-out'))
+        self.plugins = PluginRegistry()
+        self.ml = MLService(enabled=self.config.enable_ml)
+        self.reports = {}
+
+    def detect_arch(self) -> str:
+        if self.arch:
+            return self.arch.lower()
+        # TODO: Implement header/magic number inspection here
+        return "pybytecode" if self.target.suffix == '.pyc' else "x86"
+
+    def run_static(self):
+        logger.info("Starting static analysis...")
+        arch = self.detect_arch()
+        disassembler = StaticDisassembler(ArchitectureHandler.get_disassembler(arch))
+        
+        # Disassembly and IL lifting
+        il_module = disassembler.disassemble(self.target)
+        self.reports['il_representation'] = il_module.to_dict()
+
+        # Cross-reference analysis
+        xrefs = CrossRefAnalyzer().build(il_module)
+        self.reports['xrefs'] = xrefs.to_dict()
+        
+        # Decompilation pipeline
+        pipeline = DecompilationPipeline()
+        pseudo = pipeline.decompile(il_module)
+        self.reports['pseudo_code'] = pseudo
+
+        # Anti-analysis detection
+        anti_results = AntiAnalysisDetector().detect(pseudo)
+        self.reports['anti_analysis'] = anti_results
+        
+        logger.info("Static analysis complete.")
+        return self.reports
+
+    def run_dynamic(self, inputs: Optional[list[bytes]] = None):
+        logger.info("Starting dynamic analysis...")
+        with SecureSandbox(self.config) as box:
+            tracer = RuntimeTracer(box)
+            trace = tracer.run(self.target, inputs=inputs)
+            self.reports['dynamic_trace'] = trace
+        logger.info("Dynamic analysis complete.")
+        return trace
+
+    def run_symbolic(self):
+        logger.info("Starting symbolic execution...")
+        sym = AdvancedSymbolicExecutor()
+        il_module = self.reports.get('il_representation')
+        if not il_module:
+            il_module = StaticDisassembler(ArchitectureHandler.get_disassembler(self.detect_arch())).disassemble(self.target)
+        sym_result = sym.explore(il_module)
+        self.reports['symbolic_execution'] = sym_result
+        logger.info("Symbolic execution complete.")
+        return sym_result
+
+    def run_fuzzing(self, seed_inputs: Optional[list[bytes]] = None):
+        logger.info("Starting fuzzing campaign...")
+        fz = CoverageGuidedFuzzer(self.target, self.config)
+        findings = fz.fuzz(seed_inputs or [])
+        self.reports['fuzzing_findings'] = findings
+        logger.info("Fuzzing complete.")
+        return findings
+
+    def run_ml(self):
+        if not self.ml.enabled:
+            logger.info("ML service is disabled.")
+            return None
+        logger.info("Running ML-assisted analysis...")
+        features = self.ml.extract(self.reports)
+        preds = self.ml.predict_all(features)
+        self.reports['ml_predictions'] = preds
+        logger.info("ML analysis complete.")
+        return preds
+
+    def visualize(self, outdir: Path):
+        logger.info(f"Generating visualizations in {outdir}...")
+        reporter = GraphReporter(outdir)
+        reporter.emit(self.reports)
+
+    def run_pipeline(self, *, do_static=True, do_dynamic=False, do_symbolic=False, do_fuzz=False, do_ml=True):
+        if do_static: self.run_static()
+        if do_dynamic: self.run_dynamic()
+        if do_symbolic: self.run_symbolic()
+        if do_fuzz: self.run_fuzzing()
+        if do_ml: self.run_ml()
+        return self.reports
+
+
+# heliosre/il/ir.py
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
+
+@dataclass
+class ILOperand:
+    type: str  # e.g., 'reg', 'imm', 'mem'
+    value: Any
+
+@dataclass
+class ILInstr:
+    op: str  # e.g., 'ADD', 'MOV', 'JMP'
+    operands: List[ILOperand] = field(default_factory=list)
+    addr: Optional[int] = None
+    tags: Dict[str, Any] = field(default_factory=dict) # Taint, side-channel info
+
+@dataclass
+class ILBlock:
+    addr: int
+    instructions: List[ILInstr] = field(default_factory=list)
+    predecessors: List[int] = field(default_factory=list)
+    successors: List[int] = field(default_factory=list)
+
+@dataclass
+class ILFunction:
+    name: str
+    blocks: Dict[int, ILBlock] = field(default_factory=dict)
+    entry_addr: Optional[int] = None
+
+@dataclass
+class ILModule:
+    functions: Dict[str, ILFunction] = field(default_factory=dict)
+    entry_point: Optional[str] = None
+    
+    def to_dict(self):
+        # Helper for serialization/reporting
+        return {
+            'functions': {
+                name: {'entry_addr': fn.entry_addr, 'blocks': len(fn.blocks)} 
+                for name, fn in self.functions.items()
+            },
+            'entry_point': self.entry_point
+        }
+
+
+# heliosre/il/lifter.py
+from .ir import ILModule, ILFunction, ILBlock, ILInstr, ILOperand
+
+class Lifter:
+    def lift_pyc(self, bytecode):
+        # A simple conceptual lifter for Python bytecode
+        il_module = ILModule()
+        # TODO: parse bytecode, recover control flow, and build IL blocks
+        # For now, a placeholder
+        il_function = ILFunction(name='main')
+        il_block = ILBlock(addr=0)
+        il_instr = ILInstr(op='LOAD_CONST', operands=[ILOperand('imm', 'Hello World')])
+        il_block.instructions.append(il_instr)
+        il_function.blocks[0] = il_block
+        il_module.functions['main'] = il_function
+        return il_module
+
+    def lift_native(self, native_code):
+        # Placeholder for native instruction lifting to IL
+        return ILModule()
+
+
+# heliosre/il/passes.py
+from .ir import ILModule
+from ..utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+class ControlFlowRecoveryPass:
+    def run(self, il_module: ILModule) -> ILModule:
+        logger.info("Running ControlFlowRecoveryPass...")
+        # TODO: Implement control flow graph recovery logic here
+        return il_module
+
+class DataTypeInferencePass:
+    def run(self, il_module: ILModule) -> ILModule:
+        logger.info("Running DataTypeInferencePass...")
+        # TODO: Implement type inference logic here
+        return il_module
+
+class DeadCodeEliminationPass:
+    def run(self, il_module: ILModule) -> ILModule:
+        logger.info("Running DeadCodeEliminationPass...")
+        # TODO: Implement dead code elimination logic here
+        return il_module
+
+
+# heliosre/static/disasm.py
+from pathlib import Path
+from ..il.lifter import Lifter
+from ..il.ir import ILModule
+from ..arch.base import ArchitectureHandler
+from ..utils.caching import cached_disasm
+
+class StaticDisassembler:
+    def __init__(self, arch_impl):
+        self.arch_impl = arch_impl
+        self.lifter = Lifter()
+
+    @cached_disasm
+    def disassemble(self, target_path: Path) -> ILModule:
+        native_code = self.arch_impl.disassemble(target_path)
+        if self.arch_impl.__class__.__name__ == 'PyBytecodeAnalyzer':
+            # Specific lifting for Python bytecode
+            return self.lifter.lift_pyc(native_code)
+        else:
+            return self.lifter.lift_native(native_code)
+
+
+# heliosre/dynamic/sandbox.py
+import subprocess
+import contextlib
+import os
+import resource
+from typing import Optional
+from ..config import HeliosConfig
+from ..utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+class SecureSandbox(contextlib.AbstractContextManager):
+    def __init__(self, config: HeliosConfig):
+        self.config = config
+
+    def _set_rlimits(self):
+        # Set resource limits for a new process
+        if self.config.max_memory_mb > 0:
+            resource.setrlimit(resource.RLIMIT_AS, (self.config.max_memory_mb * 1024 * 1024, resource.RLIM_INFINITY))
+        if self.config.timeout_sec > 0:
+            resource.setrlimit(resource.RLIMIT_CPU, (self.config.timeout_sec, resource.RLIM_INFINITY))
+    
+    def __enter__(self):
+        logger.info("Entering sandbox. Applying resource limits.")
+        # We'll use a new process and apply limits there
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        logger.info("Exiting sandbox.")
+        return False
+
+    def execute(self, command: list[str], timeout: int, input_data: Optional[bytes] = None) -> subprocess.CompletedProcess:
+        logger.info(f"Executing sandboxed command: {' '.join(command)}")
+        return subprocess.run(
+            command,
+            input=input_data,
+            capture_output=True,
+            timeout=timeout,
+            text=True,
+            preexec_fn=self._set_rlimits,
+        )
+
+
+# heliosre/symbolic/executor.py
+from ..il.ir import ILModule, ILInstr
+from ..utils.logging import get_logger
+try:
+    from z3 import Solver, BitVec, sat, unsat
+except ImportError:
+    Solver = BitVec = sat = unsat = None
+
+logger = get_logger(__name__)
+
+class AdvancedSymbolicExecutor:
+    def __init__(self):
+        self.solver = Solver()
+        self.state = {} # Maps variable names to symbolic values
+
+    def _execute_instr(self, instr: ILInstr):
+        # This is where the core logic of symbolic execution would go
+        if instr.op == 'ADD':
+            # Placeholder: simplified example (requires proper state management)
+            sym_var_c = BitVec('c', 64)
+            self.solver.add(sym_var_c == self.state.get(instr.operands[0].value, BitVec('a',64)) +
+                                         self.state.get(instr.operands[1].value, BitVec('b',64)))
+            self.state[instr.operands[2].value] = sym_var_c
+
+    def explore(self, il_module: ILModule) -> dict:
+        if not Solver:
+            logger.error("Z3 not installed. Cannot perform symbolic execution.")
+            return {'error': 'Z3 not found'}
+
+        logger.info("Exploring symbolic execution paths...")
+        if il_module.entry_point and il_module.entry_point in il_module.functions:
+            entry_func = il_module.functions[il_module.entry_point]
+            for block in entry_func.blocks.values():
+                for instr in block.instructions:
+                    self._execute_instr(instr)
+
+        result = self.solver.check()
+        return {'status': str(result), 'model': str(self.solver.model()) if result == sat else None}
+
+
+# heliosre/fuzzing/fuzzer.py
+import random
+from pathlib import Path
+from typing import Optional
+from ..config import HeliosConfig
+from ..dynamic.sandbox import SecureSandbox
+from ..dynamic.tracer import RuntimeTracer
+from ..utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+class CoverageTracker:
+    def __init__(self):
+        self.coverage_map = set()
+
+    def update(self, trace_data):
+        # Placeholder for updating coverage from a dynamic trace
+        new_blocks = {item['block_id'] for item in trace_data if 'block_id' in item}
+        newly_found = new_blocks - self.coverage_map
+        self.coverage_map.update(new_blocks)
+        return len(newly_found) > 0
+
+class CoverageGuidedFuzzer:
+    def __init__(self, target_binary: Path, config: HeliosConfig):
+        self.target = target_binary
+        self.config = config
+        self.corpus = []
+        self.coverage = CoverageTracker()
+
+    def mutate(self, data: bytes) -> bytes:
+        # Simple mutation strategy e.g. random byte flips
+        if not data: return b'A'
+        mutated = list(data)
+        for _ in range(random.randint(1, 10)):
+            idx = random.randint(0, len(mutated) - 1)
+            mutated[idx] = random.randint(0, 255)
+        return bytes(mutated)
+
+    def fuzz(self, seed_inputs: list[bytes]) -> dict:
+        self.corpus.extend(seed_inputs)
+        crashes = []
+        
+        with SecureSandbox(self.config) as sandbox:
+            tracer = RuntimeTracer(sandbox)
+            
+            for _ in range(100): # Fuzzing iterations
+                input_data = self.mutate(random.choice(self.corpus) if self.corpus else b'')
+                trace_result = tracer.run(self.target, inputs=[input_data])
+                if 'crash' in trace_result.get('status', ''):
+                    crashes.append({'input': input_data.hex(), 'trace': trace_result})
+
+                if self.coverage.update(trace_result.get('events', [])):
+                    self.corpus.append(input_data)
+        
+        return {'total_crashes': len(crashes), 'crashes': crashes}
+
+
+# heliosre/ml/service.py
+import random
+from ..utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+class FeatureExtractor:
+    def extract(self, reports: dict) -> dict:
+        features = {}
+        # Placeholder for extracting features from reports
+        features['opcode_n_grams'] = [1, 2, 3]
+        features['string_entropy'] = random.random()
+        features['call_graph_metrics'] = {'degree_centrality': 0.5}
+        return features
+
+class MLService:
+    def __init__(self, enabled: bool):
+        self.enabled = enabled
+        self.models = {
+            'malware_detector': None,
+            'compiler_fingerprint': None
+        }
+        self.fe = FeatureExtractor()
+        # Load models if enabled (placeholder)
+
+    def extract(self, reports: dict) -> dict:
+        return self.fe.extract(reports)
+
+    def predict_all(self, features: dict) -> dict:
+        if not self.enabled:
+            return {}
+        predictions = {}
+        for name, model in self.models.items():
+            predictions[name] = random.random()
+        return predictions
+
+
+# Additional placeholder modules -- you should implement or integrate as needed:
+
+# heliosre/static/xref.py
+class CrossRefAnalyzer:
+    def build(self, il_module):
+        # returns a simple dummy cross-reference object with to_dict support
+        class XRef:
+            def to_dict(self):
+                return {"calls": [], "refs": []}
+        return XRef()
+
+# heliosre/static/decompilation.py
+from .passes import ControlFlowRecoveryPass, DataTypeInferencePass, DeadCodeEliminationPass
+from ..utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+class DecompilationPipeline:
+    def __init__(self):
+        self.passes = [
+            ControlFlowRecoveryPass(),
+            DataTypeInferencePass(),
+            DeadCodeEliminationPass(),
+        ]
+
+    def decompile(self, il_module):
+        ir = il_module
+        for p in self.passes:
+            ir = p.run(ir)
+        logger.info("Decompilation pipeline complete.")
+        # Return a simple pseudo code placeholder
+        return "// pseudocode placeholder\n" + "\n".join([fn for fn in (ir.functions or {}).keys()])
+
+
+# heliosre/utils/logging.py
+import logging
+
+def get_logger(name="helios"):
+    logger = logging.getLogger(name)
+    if not logger.hasHandlers():
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter("[%(levelname)s] %(message)s")
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+    return logger
+
+
+# heliosre/utils/caching.py
+from functools import lru_cache
+
+def cached_disasm(func):
+    cache = {}
+    def wrapper(*args, **kwargs):
+        key = args[1] if len(args) > 1 else str(args)
+        if key in cache:
+            return cache[key]
+        result = func(*args, **kwargs)
+        cache[key] = result
+        return result
+    return wrapper
+
+
+# heliosre/utils/graph.py
+from pathlib import Path
+
+class GraphReporter:
+    def __init__(self, outdir: Path):
+        self.outdir = outdir
+        self.outdir.mkdir(parents=True, exist_ok=True)
+
+    def emit(self, reports: dict):
+        summary_file = self.outdir / "summary.txt"
+        with open(summary_file, "w") as f:
+            for k in reports.keys():
+                f.write(f"{k}\n")
+
+
+# heliosre/anti/anti_analysis.py
+import re
+
+class AntiAnalysisDetector:
+    ANTI_TECHNIQUES = {
+        'timing_checks': r'rdtsc|cpuid',
+        'debug_checks': r'IsDebuggerPresent|ptrace',
+    }
+    def detect(self, code: str):
+        results = {}
+        for name, pattern in self.ANTI_TECHNIQUES.items():
+            if re.search(pattern, code, re.IGNORECASE):
+                results[name] = True
+        return results
+
+
+# heliosre/plugins/registry.py
+class PluginRegistry:
+    def __init__(self):
+        self._plugins = {}
+
+    def load(self, module):
+        for name in getattr(module, "PLUGINS", []):
+            self._plugins[name.__name__] = name
+
+    def get(self, name):
+        return self._plugins.get(name)
+
+
+# heliosre/arch/base.py
+class UniversalDisassembler:
+    def __init__(self):
+        pass
+    def disassemble(self, target_path):
+        # Fallback: return empty list
+        return []
+
+class ArchitectureHandler:
+    ARCHITECTURES = {}
+
+    @classmethod
+    def register_arch(cls, name, handler_class):
+        cls.ARCHITECTURES[name] = handler_class
+
+    @classmethod
+    def get_disassembler(cls, arch):
+        return cls.ARCHITECTURES.get(arch, UniversalDisassembler)()
+
+
+# heliosre/arch/pybytecode.py
+class PyBytecodeAnalyzer:
+    def disassemble(self, path):
+        # Open .pyc and return code object
+        import marshal
+        with open(path, "rb") as f:
+            # Skip header, varies by Python version
+            f.seek(16)
+            return marshal.load(f)
+
+# register architecture
+from .base import ArchitectureHandler
+ArchitectureHandler.register_arch("pybytecode", PyBytecodeAnalyzer)
+
+
+# heliosre/dynamic/tracer.py
+class RuntimeTracer:
+    def __init__(self, sandbox):
+        self.sandbox = sandbox
+
+    def run(self, target_path, inputs=None):
+        # Placeholder: should execute target with input in sandbox and trace syscalls etc.
+        # Here we return a dummy trace event list
+        return {"status": "ok", "events": [{"block_id": 1}, {"block_id": 2}]}
+
+
+# heliosre/cli.py
+import argparse
+from pathlib import Path
+from .engine import ReverseEngineeringEngine
+from .config import HeliosConfig
+
+def main():
+    ap = argparse.ArgumentParser(description="HeliosRE – Modular Reverse Engineering Engine")
+    ap.add_argument("target", help="File to analyze")
+    ap.add_argument("--arch", default=None, help="Architecture override")
+    ap.add_argument("--no-ml", action="store_true", help="Disable ML analysis")
+    ap.add_argument("--dynamic", action="store_true", help="Enable dynamic analysis")
+    ap.add_argument("--symbolic", action="store_true", help="Enable symbolic execution")
+    ap.add_argument("--fuzz", action="store_true", help="Enable fuzzing")
+    ap.add_argument("--out", default="./helios-out", help="Output directory")
+
+    ns = ap.parse_args()
+    cfg = HeliosConfig(workdir=Path(ns.out), timeout_sec=45, enable_ml=not ns.no_ml)
+    eng = ReverseEngineeringEngine(ns.target, arch=ns.arch, config=cfg)
+    reports = eng.run_pipeline(do_dynamic=ns.dynamic, do_symbolic=ns.symbolic, do_fuzz=ns.fuzz)
+    eng.visualize(Path(ns.out))
+    print("Analysis complete. Reports saved to:", ns.out)
+
+if __name__ == "__main__":
+    main()
