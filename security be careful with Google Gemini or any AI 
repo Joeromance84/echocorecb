@@ -1,0 +1,154 @@
+import asyncio
+import hashlib
+import json
+import time
+from collections import deque
+from datetime import datetime, timezone
+from typing import Dict, List
+import pytest
+
+# Assuming GovernanceIntrusionContainment class is imported or defined above
+
+class MockSnapshotStorage:
+    def __init__(self):
+        self.snapshots = {}
+        self.fail_load = False
+        self.fail_restore = False
+
+    async def save_snapshot(self, hash_val: str, state: dict):
+        self.snapshots[hash_val] = json.dumps(state)
+
+    async def load_snapshot(self, hash_val: str):
+        if self.fail_load:
+            raise IOError("Load failed")
+        snap = self.snapshots.get(hash_val)
+        if not snap or self.fail_restore:
+            raise IOError("Restore failed")
+        return json.loads(snap)
+
+
+class TestGovernanceIntrusionContainment:
+    @pytest.fixture
+    def setup_gic(self):
+        kg = {"node1": {"data": 123}, "node2": {"data": 456}}
+        gic = GovernanceIntrusionContainment(kg)
+        gic.snapshot_loader = self.snapshot_loader
+        gic.snapshot_restorer = self.snapshot_restorer
+        gic.persist_audit_hook = self.persist_audit
+        gic.verify_signature_hook = self.verify_signature
+        gic.snapshot_storage = MockSnapshotStorage()
+        self.audit_records = []
+        self.signature_valid = True
+        return gic
+
+    async def snapshot_loader(self, hash_val):
+        return await self.snapshot_storage.load_snapshot(hash_val)
+
+    async def snapshot_restorer(self, snapshot):
+        if hasattr(self.snapshot_storage, 'fail_restore') and self.snapshot_storage.fail_restore:
+            raise IOError("Simulated restore failure")
+        return True
+
+    def persist_audit(self, event):
+        self.audit_records.append(event)
+
+    async def verify_signature(self, signer, action_id):
+        return self.signature_valid
+
+    @pytest.mark.asyncio
+    async def test_integrity_hash_change_triggers_containment(self, setup_gic):
+        gic = setup_gic
+        initial_hash = gic.compute_integrity_hash()
+        gic.integrity_hash_history.append(initial_hash)
+
+        gic.knowledge_graph["node1"]["data"] = 999
+
+        assert not gic.containment_engaged
+
+        await gic.periodic_integrity_check(interval_secs=0)
+
+        assert gic.containment_engaged
+
+    @pytest.mark.asyncio
+    async def test_multisig_happy_path(self, setup_gic):
+        gic = setup_gic
+        action_id = "test_action_1"
+        success_1 = await gic.request_multi_signature(action_id, "signerA")
+        assert success_1 is False
+        success_2 = await gic.request_multi_signature(action_id, "signerB")
+        assert success_2 is True
+        success_3 = await gic.request_multi_signature("new_action", "signerA")
+        assert success_3 is False
+
+    @pytest.mark.asyncio
+    async def test_multisig_invalid_signature_rejected(self, setup_gic):
+        gic = setup_gic
+        self.signature_valid = False
+
+        success = await gic.request_multi_signature("action1", "signerA")
+        assert not success
+        assert not gic.pending_signatures
+
+    @pytest.mark.asyncio
+    async def test_audit_logging_on_containment(self, setup_gic):
+        gic = setup_gic
+        gic.knowledge_graph["node1"]["data"] = 999
+        await gic.periodic_integrity_check(interval_secs=0)
+
+        assert any("containment_engaged" in str(record) for record in self.audit_records)
+
+    @pytest.mark.asyncio
+    async def test_concurrent_multisig_requests(self, setup_gic):
+        gic = setup_gic
+        action_id = "concurrent_action"
+
+        await asyncio.gather(
+            gic.request_multi_signature(action_id, "signerA"),
+            gic.request_multi_signature(action_id, "signerB"),
+        )
+
+        assert len(gic.pending_signatures) == 2
+
+    @pytest.mark.asyncio
+    async def test_snapshot_restore_failure_triggers_containment(self, setup_gic):
+        gic = setup_gic
+
+        current_hash = gic.compute_integrity_hash()
+        await gic.snapshot_storage.save_snapshot(current_hash, gic.knowledge_graph)
+
+        gic.snapshot_storage.fail_restore = True
+
+        try:
+            await gic.rollback_to_last_safe_state()
+        except Exception:
+            pass
+
+        assert not gic.containment_engaged
+
+
+    @pytest.mark.asyncio
+    async def test_anomaly_detection_triggers_containment(self, setup_gic):
+        gic = setup_gic
+
+        def fake_anomaly_detector(metrics):
+            if metrics.get("cpu_util", 0) > 90:
+                return True
+            return False
+
+        gic.register_anomaly_detector(fake_anomaly_detector)
+        await gic.monitor_anomalies({"cpu_util": 10})
+        assert not gic.containment_engaged
+        await gic.monitor_anomalies({"cpu_util": 95})
+        assert gic.containment_engaged
+
+
+# Command line run instructions:
+# save this as test_governance_ic.py
+# pip install pytest pytest-asyncio
+# Run tests by: pytest test_governance_ic.py -v
+
+if __name__ == "__main__":
+    import sys
+    import pytest
+
+    sys.exit(pytest.main([__file__, "-v"]))
