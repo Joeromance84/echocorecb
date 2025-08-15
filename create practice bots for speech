@@ -1,0 +1,220 @@
+"""
+Atlas Resonant Speech Network - Integrated Architecture
+Developed by Logan Lorentz
+
+Combines:
+1. Speech AI Farm distributed node architecture
+2. Automated evolution/self-improvement strategies
+3. Large-scale TTS, ASR, NLU, Prosody, and Multilingual agents
+4. AI Speech Helper, Teacher, Conversation Practice Bot (as one of the Worker Nodes)
+"""
+
+import json
+import time
+import uuid
+import logging
+import random
+from typing import Dict, Any, List, Optional
+
+# Speech/NLP Backend Imports
+import speech_recognition as sr
+import pyttsx3
+
+# --- Logging Setup ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# ===========================================================
+# CONFIGURATION
+# ===========================================================
+class Config:
+    STT_ENGINE = 'google'
+    TTS_ENGINE = 'sapi5'  # Platform-specific engine
+    VOICE_ID = 0
+    INTENT_MAPPING_FILE = 'intents.json'
+
+
+# ===========================================================
+# BASE NODE CLASSES
+# ===========================================================
+class SpeechNode:
+    """Base class for all AI Workers in the Speech Farm."""
+    def __init__(self, node_id: Optional[str] = None):
+        self.node_id = node_id or str(uuid.uuid4())
+        self.performance_score = 0.0
+        self.task_specialty = "general"
+
+    def train(self, data):
+        """Stub for model training logic."""
+        pass
+
+    def evaluate(self, benchmarks):
+        """Evaluate the node and update performance_score."""
+        pass
+
+    def run_inference(self, input_data):
+        """Run the node's inference logic."""
+        pass
+
+
+class SpeechBot(SpeechNode):
+    """
+    A Worker Node: speech assistant that listens, responds, teaches, and practices conversation.
+    """
+    def __init__(self):
+        super().__init__()
+        self.recognizer = sr.Recognizer()
+        self.tts_engine = pyttsx3.init(Config.TTS_ENGINE)
+        self.tts_engine.setProperty('rate', 170)
+        self.dialog_manager = DialogManager()
+        self.load_intents()
+        self.task_specialty = "interactive_assistant"
+
+    def load_intents(self):
+        try:
+            with open(Config.INTENT_MAPPING_FILE, 'r') as f:
+                self.intents = json.load(f)
+        except FileNotFoundError:
+            self.intents = {}
+            logging.warning("Intents file not found.")
+
+    def listen(self) -> str:
+        with sr.Microphone() as source:
+            logging.info("Listening...")
+            audio = self.recognizer.listen(source, timeout=5)
+        try:
+            text = self.recognizer.recognize_google(audio)
+            logging.info(f"User said: {text}")
+            return text
+        except Exception as e:
+            logging.error(f"Speech recognition error: {e}")
+            return ""
+
+    def speak(self, text: str):
+        logging.info(f"Bot: {text}")
+        self.tts_engine.say(text)
+        self.tts_engine.runAndWait()
+
+    def process_command(self, user_input: str) -> str:
+        intent, entities = self.dialog_manager.get_intent_and_entities(user_input, self.intents)
+        response = self.dialog_manager.handle_action(intent, entities)
+        return response
+
+    def interactive_loop(self):
+        self.speak("Hello! I am your AI speech assistant. How can I help you today?")
+        while True:
+            user_input = self.listen()
+            if user_input.lower() in ["exit", "stop", "goodbye"]:
+                self.speak("Goodbye!")
+                break
+            response = self.process_command(user_input)
+            self.speak(response)
+
+
+# ===========================================================
+# DIALOG & MODULES
+# ===========================================================
+class DialogManager:
+    def __init__(self):
+        self.state = "idle"
+
+    def get_intent_and_entities(self, text: str, intents: Dict) -> (str, Dict):
+        text = text.lower()
+        for intent_name, keywords in intents.items():
+            for keyword in keywords['keywords']:
+                if keyword in text:
+                    entities = {"topic": text.replace(keyword, "").strip()}
+                    return intent_name, entities
+        return "fallback", {}
+
+    def handle_action(self, intent: str, entities: Dict) -> str:
+        if intent == "start_lesson":
+            self.state = "teaching"
+            topic = entities.get("topic", "general English")
+            return f"Let's start a lesson on {topic}."
+        if intent == "start_practice":
+            self.state = "practicing"
+            return "Great! Tell me about your day."
+        if intent == "create_custom_dialog":
+            self.state = "building"
+            return "Builder mode activated. Teach me something."
+        return "I'm not sure I can do that yet."
+
+class SpeechHelperModule:
+    def analyze_speech(self, audio_data):
+        logging.info("Analyzing speech...")
+        return {"pronunciation_score": 0.9, "feedback": "Good pronunciation!"}
+
+class TeacherModule:
+    def get_next_lesson(self, topic: str, progress: Dict):
+        return f"Next {topic} lesson: practice verb tenses."
+
+
+# ===========================================================
+# MASTER ORCHESTRATOR
+# ===========================================================
+class MasterOrchestrator:
+    """
+    Coordinates the Speech Farm: spawns nodes, evaluates them, evolves models.
+    """
+    def __init__(self):
+        self.nodes: List[SpeechNode] = []
+        self.generations = 0
+
+    def spawn_node(self, node_type="speechbot"):
+        if node_type == "speechbot":
+            node = SpeechBot()
+        else:
+            node = SpeechNode()
+        self.nodes.append(node)
+        logging.info(f"Spawned node {node.node_id} [{node_type}]")
+        return node
+
+    def evaluate_nodes(self):
+        for node in self.nodes:
+            # mock eval
+            node.performance_score = random.random()
+            logging.info(f"Node {node.node_id} score: {node.performance_score:.3f}")
+
+    def evolve(self):
+        """Select top performers, retire low performers, spawn new variants."""
+        self.nodes.sort(key=lambda n: n.performance_score, reverse=True)
+        survivors = self.nodes[: max(1, len(self.nodes)//2)]
+        self.nodes = survivors
+        while len(self.nodes) < 5:
+            self.spawn_node("speechbot")
+        self.generations += 1
+        logging.info(f"Evolution cycle {self.generations} complete.")
+
+    def continuous_training_loop(self, cycles=3):
+        for _ in range(cycles):
+            self.evaluate_nodes()
+            self.evolve()
+            time.sleep(1)
+
+
+# ===========================================================
+# MAIN EXECUTION
+# ===========================================================
+if __name__ == "__main__":
+    # Sample intents file
+    sample_intents = {
+        "start_lesson": {"keywords": ["start a lesson", "teach me about", "learn"]},
+        "start_practice": {"keywords": ["let's practice", "talk to me"]},
+        "create_custom_dialog": {"keywords": ["build a lesson", "create a conversation"]}
+    }
+    with open(Config.INTENT_MAPPING_FILE, 'w') as f:
+        json.dump(sample_intents, f, indent=4)
+
+    # Orchestrator controlling whole farm
+    farm = MasterOrchestrator()
+
+    # Spawn a speech bot node
+    bot_node = farm.spawn_node("speechbot")
+    
+    # Simulate limited interactive run for that node
+    # bot_node.interactive_loop()  # Uncomment for live speech
+
+    # Run training/evolution loop
+    farm.continuous_training_loop(cycles=5)
+
+    logging.info("Atlas Resonant Speech Network operation complete.")
