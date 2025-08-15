@@ -1,0 +1,467 @@
+# heliosre/core.py
+
+import sys
+import asyncio
+import json
+import capstone
+import yaml
+import subprocess
+import resource
+import contextlib
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, List, Optional, Any, Type, Union
+
+# --- Exception Hierarchy ---
+class HeliosError(Exception):
+    """Base exception for all HeliosRE errors"""
+    pass
+
+class AnalysisError(HeliosError):
+    """Errors during analysis phases"""
+    pass
+
+class SandboxError(HeliosError):
+    """Sandbox-related failures"""
+    pass
+
+# --- Logging (Simplified for Consolidation) ---
+import logging
+def get_logger(name: str) -> logging.Logger:
+    return logging.getLogger(name)
+
+def setup_logging(verbose: bool):
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+
+logger = get_logger(__name__)
+
+# --- Configuration ---
+@dataclass
+class AnalysisProfile:
+    timeout_sec: int = 30
+    max_memory_mb: int = 1024
+    enabled_plugins: List[str] = field(default_factory=lambda: ['standard'])
+
+@dataclass
+class MLConfig:
+    enabled: bool = True
+    model_path: Path = Path('./models')
+    features: Dict[str, bool] = field(default_factory=lambda: {
+        'opcode_histogram': True,
+        'string_entropy': True,
+        'cfg_metrics': True
+    })
+
+@dataclass
+class HeliosConfig:
+    workdir: Path
+    analysis: AnalysisProfile = field(default_factory=AnalysisProfile)
+    ml: MLConfig = field(default_factory=MLConfig)
+    collab_url: Optional[str] = None
+    plugins: Dict[str, dict] = field(default_factory=dict)
+
+    @classmethod
+    def from_yaml(cls, path: Path) -> 'HeliosConfig':
+        with open(path) as f:
+            data = yaml.safe_load(f)
+            return cls(
+                workdir=Path(data.get('workdir', './helios-out')),
+                analysis=AnalysisProfile(**data.get('analysis', {})),
+                ml=MLConfig(**data.get('ml', {})),
+                collab_url=data.get('collab_url'),
+                plugins=data.get('plugins', {})
+            )
+
+# --- Shared Context and Unified Core ---
+@dataclass
+class AnalysisContext:
+    target: Path
+    config: HeliosConfig
+    intermediate_results: Dict[str, Any] = field(default_factory=dict)
+    shared_cache: Dict[str, Any] = field(default_factory=dict)
+    architecture: Optional[str] = None
+    symbolic_inputs: List[Any] = field(default_factory=list)
+
+class UnifiedCore:
+    def __init__(self, config: HeliosConfig):
+        self.config = config
+        self.context = AnalysisContext(target=config.workdir, config=config)
+        self.executor = ThreadPoolExecutor(max_workers=4)
+        self._setup_components()
+
+    def _setup_components(self):
+        self.plugins = PluginManager(self.context)
+        self.arch_mgr = ArchitectureManager(self.context)
+        self.lifter = LiftingPipeline(self.context)
+        self.static = StaticAnalyzer(self.context)
+        self.dynamic = DynamicAnalysisManager(self.context)
+        self.symbolic = SymbolicEngine(self.context)
+        self.fuzzer = FuzzingManager(self.context)
+        self.ml = MLAnalysisService(self.context)
+
+    async def execute_pipeline(self, target: Path) -> Dict[str, Any]:
+        self.context.target = target.absolute()
+        try:
+            self.context.architecture = await self._detect_architecture()
+            static_task = asyncio.to_thread(self._run_static_analysis)
+            dynamic_task = asyncio.to_thread(self._run_dynamic_analysis)
+            await asyncio.gather(static_task, dynamic_task)
+            await asyncio.to_thread(self._run_hybrid_analysis)
+            if self.config.ml.enabled:
+                await asyncio.to_thread(self._run_ml_analysis)
+            return self.context.intermediate_results
+        except Exception as e:
+            logger.error(f"Analysis pipeline failed: {str(e)}")
+            raise
+
+    async def _detect_architecture(self) -> str:
+        try:
+            arch = await self.arch_mgr.detect(self.context.target)
+            logger.info(f"Detected architecture: {arch}")
+            return arch
+        except Exception as e:
+            logger.warning(f"Architecture detection failed, using default: {str(e)}")
+            return 'x86_64'
+
+    def _run_static_analysis(self):
+        self.context.intermediate_results.update(self.static.analyze(self.context.target))
+        self.context.shared_cache['il'] = self.lifter.process(
+            self.context.target,
+            self.arch_mgr.get_handler(self.context.architecture)
+        )
+
+    def _run_dynamic_analysis(self):
+        dyn_results = self.dynamic.analyze(self.context.target, self.context.shared_cache.get('il'))
+        self.context.intermediate_results['dynamic'] = dyn_results
+        self.context.shared_cache['coverage'] = dyn_results.get('coverage', {})
+
+    def _run_hybrid_analysis(self):
+        if 'il' not in self.context.shared_cache:
+            self._run_static_analysis()
+        patched_il = self.dynamic.patch_il(
+            self.context.shared_cache['il'],
+            self.context.intermediate_results.get('dynamic', {})
+        )
+        symbolic_result = self.symbolic.explore(
+            patched_il,
+            self.context.shared_cache.get('coverage', {})
+        )
+        self.context.intermediate_results['hybrid'] = {
+            'patched_il': patched_il,
+            'symbolic': symbolic_result
+        }
+
+    def _run_ml_analysis(self):
+        features = self.ml.extract(self.context.intermediate_results)
+        predictions = self.ml.predict_all(features)
+        self.context.intermediate_results['ml'] = predictions
+
+# --- Architecture Managers ---
+class ArchitectureManager:
+    def __init__(self, context: AnalysisContext):
+        self.context = context
+        self._handlers: Dict[str, Type['ArchitectureHandler']] = {}
+        # Register standard handlers here
+        self.register_handler('x86_64', X86Handler)
+
+    def register_handler(self, name: str, handler: Type['ArchitectureHandler']):
+        self._handlers[name.lower()] = handler
+        logger.debug(f"Registered architecture handler: {name}")
+
+    async def detect(self, target: Path) -> str:
+        magic = self._read_magic_bytes(target)
+        for name, handler in self._handlers.items():
+            if handler.can_handle(magic):
+                return name
+        return 'x86_64'
+
+    def get_handler(self, arch: str) -> 'ArchitectureHandler':
+        handler_class = self._handlers.get(arch.lower())
+        if not handler_class:
+            raise ValueError(f"No handler registered for architecture: {arch}")
+        return handler_class(self.context)
+
+    def _read_magic_bytes(self, target: Path) -> bytes:
+        with open(target, 'rb') as f:
+            return f.read(4)
+
+class ArchitectureHandler:
+    @staticmethod
+    def can_handle(magic_bytes: bytes) -> bool:
+        raise NotImplementedError
+    def __init__(self, context: AnalysisContext):
+        self.context = context
+    def disassemble(self, target: Path) -> list:
+        raise NotImplementedError
+
+class X86Handler(ArchitectureHandler):
+    @staticmethod
+    def can_handle(magic_bytes: bytes) -> bool:
+        return magic_bytes.startswith(b'\x7fELF')
+    def __init__(self, context: AnalysisContext):
+        super().__init__(context)
+        self._md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
+    def disassemble(self, target: Path) -> list:
+        # TODO: Read binary code from a file section (e.g., .text)
+        code = target.read_bytes()
+        disassembled_instrs = []
+        for i in self._md.disasm(code, 0x1000):
+            disassembled_instrs.append(i)
+        return disassembled_instrs
+
+# --- Intermediate Language ---
+@dataclass
+class UnifiedIL:
+    context: AnalysisContext
+    functions: Dict[str, 'ILFunction'] = field(default_factory=dict)
+    globals: Dict[str, 'ILVariable'] = field(default_factory=dict)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    def merge_dynamic(self, trace_data: Dict[str, Any]):
+        for var, runtime_type in trace_data.get('types', {}).items():
+            if var in self.globals:
+                self.globals[var].inferred_type = runtime_type
+        for block in trace_data.get('covered_blocks', []):
+            if block in self.functions:
+                self.functions[block].tags['executed'] = True
+
+@dataclass
+class ILFunction:
+    name: str
+    blocks: Dict[int, 'ILBlock'] = field(default_factory=dict)
+    parameters: List['ILVariable'] = field(default_factory=list)
+    return_type: Optional[str] = None
+    tags: Dict[str, Any] = field(default_factory=dict)
+
+@dataclass
+class ILBlock:
+    addr: int
+    instructions: List['ILInstr'] = field(default_factory=list)
+    predecessors: List[int] = field(default_factory=list)
+    successors: List[int] = field(default_factory=list)
+
+@dataclass
+class ILInstr:
+    op: str
+    operands: List[Any] = field(default_factory=list)
+    addr: Optional[int] = None
+    tags: Dict[str, Any] = field(default_factory=dict)
+
+@dataclass
+class ILVariable:
+    name: str
+    inferred_type: Optional[str] = None
+    taint_sources: List[str] = field(default_factory=list)
+    value_range: Optional[tuple] = None
+
+class LiftingPipeline:
+    def __init__(self, context: AnalysisContext):
+        self.context = context
+        self.passes = [] # No passes yet
+
+    def process(self, target: Path, arch_handler: ArchitectureHandler) -> UnifiedIL:
+        native_blocks = arch_handler.disassemble(target)
+        il_module = UnifiedIL(self.context)
+        il_func = ILFunction(name='main')
+        il_block = ILBlock(addr=0x1000)
+        for instr in native_blocks:
+            il_instr = ILInstr(
+                op=instr.mnemonic,
+                operands=[str(instr.op_str)],
+                addr=instr.address
+            )
+            il_block.instructions.append(il_instr)
+        il_func.blocks[0x1000] = il_block
+        il_module.functions['main'] = il_func
+        for pass_ in self.passes:
+            il_module = pass_.run(il_module)
+        return il_module
+
+# --- Static Analysis ---
+class StaticAnalyzer:
+    def __init__(self, context: AnalysisContext):
+        self.context = context
+    def analyze(self, target: Path) -> Dict[str, Any]:
+        return {
+            'file_info': self._analyze_file_header(target),
+            'signatures': [],
+            'strings': [],
+            'control_flow': {}
+        }
+    def _analyze_file_header(self, target: Path) -> Dict[str, Any]:
+        return {'format': 'PE', 'sections': []}
+
+# --- Dynamic Analysis ---
+class DynamicAnalysisManager:
+    def __init__(self, context: AnalysisContext):
+        self.context = context
+    def analyze(self, target: Path, il: Optional[UnifiedIL] = None) -> Dict[str, Any]:
+        logger.info(f"Starting dynamic analysis of {target.name}")
+        trace = {
+            'events': [
+                {'addr': 0x1020, 'op': 'MOV', 'reg': 'RAX', 'val': 0x1100},
+                {'addr': 0x1025, 'op': 'JMP', 'target_addr': 0x1100}
+            ],
+            'covered_blocks': [0x1020, 0x1100]
+        }
+        coverage = self._calculate_coverage(trace)
+        return {'traces': trace, 'coverage': coverage, 'runtime_types': {}}
+    def _calculate_coverage(self, trace) -> Dict[str, Any]:
+        return {'executed_blocks': trace['covered_blocks']}
+    def patch_il(self, il: UnifiedIL, dynamic_results: Dict[str, Any]) -> UnifiedIL:
+        il.metadata['coverage'] = dynamic_results['coverage']['executed_blocks']
+        if 'main' in il.functions:
+            for block in il.functions['main'].blocks.values():
+                for instr in block.instructions:
+                    if instr.op == 'JMP' and len(instr.operands) == 1:
+                        resolved_target = self._find_resolved_target(instr, dynamic_results)
+                        if resolved_target:
+                            instr.operands = [resolved_target]
+                            instr.tags['resolved_by'] = 'dynamic_analysis'
+        il.merge_dynamic(dynamic_results)
+        return il
+    def _find_resolved_target(self, instr, dynamic_results):
+        for event in dynamic_results['traces']['events']:
+            if event.get('addr') == instr.addr and 'target_addr' in event:
+                return event['target_addr']
+        return None
+
+# --- Symbolic Execution ---
+class SymbolicEngine:
+    def __init__(self, context: AnalysisContext):
+        self.context = context
+        try:
+            from z3 import Solver, BitVec, sat, BoolVal
+            self.solver = Solver()
+            self.BitVec = BitVec
+            self.sat = sat
+            self.BoolVal = BoolVal
+        except ImportError:
+            self.solver = None
+    def explore(self, il_module: UnifiedIL, coverage: Dict[str, Any]) -> Dict[str, Any]:
+        if not self.solver:
+            return {'error': 'Z3 solver not available'}
+        uncovered_blocks = self._find_uncovered_blocks(il_module, coverage)
+        self.context.symbolic_inputs = []
+        for block_addr in uncovered_blocks:
+            path_constraint = self._generate_path_to_block(il_module, block_addr)
+            self.solver.push()
+            self.solver.add(path_constraint)
+            if self.solver.check() == self.sat:
+                model = self.solver.model()
+                self.context.symbolic_inputs.append(model)
+            self.solver.pop()
+        return {
+            'state': str(self.solver.check()),
+            'new_inputs_generated': len(self.context.symbolic_inputs)
+        }
+    def _find_uncovered_blocks(self, il_module: UnifiedIL, coverage):
+        all_blocks = set()
+        for func in il_module.functions.values():
+            all_blocks.update(func.blocks.keys())
+        executed = set(coverage.get('executed_blocks', []))
+        return list(all_blocks - executed)
+    def _generate_path_to_block(self, il_module: UnifiedIL, block_addr):
+        return self.BoolVal(True)
+
+# --- Fuzzing ---
+class FuzzingManager:
+    def __init__(self, context: AnalysisContext):
+        self.context = context
+
+# --- Machine Learning ---
+class MLAnalysisService:
+    def __init__(self, context: AnalysisContext):
+        self.context = context
+    def extract(self, results: Dict) -> Dict:
+        return {}
+    def predict_all(self, features: Dict) -> Dict:
+        return {}
+
+# --- Plugin System ---
+class PluginManager:
+    def __init__(self, context: AnalysisContext):
+        self.context = context
+        self._plugins: Dict[str, 'PluginBase'] = {}
+    def register_plugin(self, name: str, plugin: Type['PluginBase']):
+        self._plugins[name] = plugin(self.context)
+        logger.info(f"Registered plugin: {name}")
+    def get_plugin(self, name: str) -> 'PluginBase':
+        plugin = self._plugins.get(name)
+        if not plugin:
+            raise ValueError(f"Plugin not found: {name}")
+        return plugin
+    def run_post_lifting_hooks(self, il_module: 'UnifiedIL') -> 'UnifiedIL':
+        for name, plugin in self._plugins.items():
+            il_module = plugin.on_post_lifting(il_module)
+        return il_module
+
+class PluginBase:
+    def __init__(self, context: AnalysisContext):
+        self.context = context
+    def on_post_lifting(self, il_module: 'UnifiedIL') -> 'UnifiedIL':
+        return il_module
+
+# --- Reporting ---
+class ReportManager:
+    def __init__(self, output_dir: Path):
+        self.output_dir = output_dir
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+    async def generate(self, results: Dict[str, Any]) -> None:
+        report_path_json = self.output_dir / 'analysis_report.json'
+        with open(report_path_json, 'w') as f:
+            json.dump(results, f, indent=2, default=str)
+        report_path_html = self.output_dir / 'index.html'
+        html_content = self._generate_html_summary(results)
+        with open(report_path_html, 'w') as f:
+            f.write(html_content)
+    def _generate_html_summary(self, results: Dict[str, Any]) -> str:
+        html = "<html><body>"
+        html += "<h1>HeliosRE Analysis Report</h1>"
+        html += f"<h2>Target: {results.get('metadata', {}).get('target', 'N/A')}</h2>"
+        html += "<pre>" + json.dumps(results, indent=2, default=str) + "</pre>"
+        html += "</body></html>"
+        return html
+
+# --- Main CLI ---
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="HeliosRE - Advanced Program Analysis Platform",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    parser.add_argument("target", help="Target file to analyze")
+    parser.add_argument("-o", "--output", default="./helios-out",
+                       help="Output directory for reports")
+    parser.add_argument("--arch", help="Override architecture detection")
+    parser.add_argument("--timeout", type=int, default=30,
+                       help="Analysis timeout in seconds")
+    parser.add_argument("--no-ml", action="store_true",
+                       help="Disable machine learning analysis")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                       help="Enable verbose logging")
+    return parser.parse_args()
+
+async def main():
+    args = parse_args()
+    setup_logging(args.verbose)
+    config = HeliosConfig(
+        workdir=Path(args.output),
+        analysis=AnalysisProfile(timeout_sec=args.timeout),
+        ml=MLConfig(enabled=not args.no_ml)
+    )
+    core = UnifiedCore(config)
+    try:
+        results = await core.execute_pipeline(Path(args.target))
+        reporter = ReportManager(config.workdir)
+        await reporter.generate(results)
+        logger.info(f"Analysis complete. Reports saved to {args.output}")
+        return 0
+    except Exception as e:
+        logger.error(f"Analysis failed: {str(e)}")
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(asyncio.run(main()))
