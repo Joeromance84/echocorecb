@@ -1,0 +1,539 @@
+import random
+import asyncio
+from dataclasses import dataclass, field
+from typing import List, Dict, Any, AsyncIterable, Optional, Set
+import numpy as np
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+import logging
+from collections import deque
+import json
+from pathlib import Path
+
+# --------------------------
+# Enhanced Logging Setup
+# --------------------------
+logger = logging.getLogger("neural_web_core")
+logger.setLevel(logging.INFO)
+
+if not logger.hasHandlers():
+    console_handler = logging.StreamHandler()
+    file_handler = logging.FileHandler('neural_web.log')
+    
+    formatter = logging.Formatter(
+        "[%(asctime)s] [%(levelname)s] [%(module)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    
+    console_handler.setFormatter(formatter)
+    file_handler.setFormatter(formatter)
+    
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
+
+# --------------------------
+# Core Data Structures
+# --------------------------
+
+@dataclass
+class ConceptualNode:
+    concept: str
+    embedding: np.ndarray
+    tags: Set[str] = field(default_factory=set)
+    connections: Dict[str, float] = field(default_factory=dict)
+    activation: float = 1.0  # How frequently this node is activated
+    last_accessed: float = 0.0
+
+@dataclass
+class ExplorationPath:
+    nodes: List[str]
+    edges: List[Dict[str, float]]  # Store edge metadata
+    intuition_score: float
+    diversity_score: float
+    surprise_score: float
+    coherence_score: float
+    raw_representation: str
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+# --------------------------
+# Conceptual Graph (Enhanced)
+# --------------------------
+
+class ConceptualGraph:
+    def __init__(self, persistence_file: Optional[Path] = None):
+        self.model = SentenceTransformer('all-MiniLM-L6-v2')
+        self.nodes: Dict[str, ConceptualNode] = {}
+        self.persistence_file = persistence_file
+        self._setup_graph()
+
+    def _setup_graph(self):
+        """Initialize graph with default concepts or load from persistence"""
+        if self.persistence_file and self.persistence_file.exists():
+            self.load_graph()
+        else:
+            self._load_default_concepts()
+        logger.info(f"Graph initialized with {len(self.nodes)} nodes")
+
+    def _load_default_concepts(self):
+        """Seed with multi-domain concepts"""
+        concept_map = {
+            'nature': ['fractal', 'symbiosis', 'biomimicry', 'emergence'],
+            'tech': ['neural network', 'quantum computing', 'blockchain'],
+            'art': ['generative art', 'surrealism', 'interactive installation'],
+            'math': ['topology', 'graph theory', 'complex systems']
+        }
+        for domain, concepts in concept_map.items():
+            for concept in concepts:
+                self.add_node(concept, {domain})
+
+    def add_node(self, concept: str, tags: Set[str], 
+                embedding: Optional[np.ndarray] = None):
+        """Add or update a node in the graph"""
+        if concept not in self.nodes:
+            node_embedding = embedding or self.model.encode(concept)
+            self.nodes[concept] = ConceptualNode(
+                concept=concept,
+                embedding=node_embedding,
+                tags=tags
+            )
+        else:
+            self.nodes[concept].tags.update(tags)
+            if embedding is not None:
+                self.nodes[concept].embedding = embedding
+
+    def build_connections(self, similarity_threshold: float = 0.3):
+        """Build edges based on semantic similarity"""
+        node_list = list(self.nodes.values())
+        for i, node1 in enumerate(node_list):
+            for node2 in node_list[i+1:]:
+                sim = cosine_similarity(
+                    node1.embedding.reshape(1, -1),
+                    node2.embedding.reshape(1, -1)
+                )[0][0]
+                if sim > similarity_threshold:
+                    node1.connections[node2.concept] = sim
+                    node2.connections[node1.concept] = sim
+        logger.info(f"Built connections with threshold {similarity_threshold}")
+
+    def get_related_nodes(self, concept: str, 
+                        top_k: int = 5,
+                        diversity_penalty: float = 0.3) -> List[Dict[str, Any]]:
+        """
+        Get related nodes with diversity enhancement
+        Args:
+            diversity_penalty: Penalty for nodes with similar tags (0-1)
+        """
+        if concept not in self.nodes:
+            return []
+            
+        base_node = self.nodes[concept]
+        candidates = []
+        
+        # First pass: direct connections
+        for other_concept, similarity in base_node.connections.items():
+            other_node = self.nodes[other_concept]
+            # Score combines similarity and activation with diversity
+            score = (similarity * other_node.activation * 
+                    (1 - diversity_penalty * self._tag_overlap(base_node, other_node)))
+            candidates.append({
+                'concept': other_concept,
+                'similarity': similarity,
+                'score': score,
+                'node': other_node
+            })
+        
+        # Sort and return top k
+        return sorted(candidates, key=lambda x: x['score'], reverse=True)[:top_k]
+
+    def _tag_overlap(self, node1: ConceptualNode, node2: ConceptualNode) -> float:
+        """Calculate tag similarity between nodes (0-1)"""
+        intersection = node1.tags & node2.tags
+        union = node1.tags | node2.tags
+        return len(intersection) / len(union) if union else 0
+
+    def save_graph(self):
+        """Persist graph to disk"""
+        if not self.persistence_file:
+            return
+            
+        data = {
+            'nodes': {
+                concept: {
+                    'concept': node.concept,
+                    'embedding': node.embedding.tolist(),
+                    'tags': list(node.tags),
+                    'activation': node.activation
+                }
+                for concept, node in self.nodes.items()
+            }
+        }
+        
+        with open(self.persistence_file, 'w') as f:
+            json.dump(data, f)
+        logger.info(f"Graph saved to {self.persistence_file}")
+
+    def load_graph(self):
+        """Load graph from disk"""
+        try:
+            with open(self.persistence_file) as f:
+                data = json.load(f)
+                
+            for concept, node_data in data['nodes'].items():
+                self.add_node(
+                    concept=concept,
+                    tags=set(node_data['tags']),
+                    embedding=np.array(node_data['embedding'])
+                )
+                self.nodes[concept].activation = node_data['activation']
+                
+            self.build_connections()
+            logger.info(f"Graph loaded from {self.persistence_file}")
+        except Exception as e:
+            logger.error(f"Failed to load graph: {str(e)}")
+            self._load_default_concepts()
+
+# --------------------------
+# Enhanced Path Explorer
+# --------------------------
+
+class PathExplorer:
+    def __init__(self, graph: ConceptualGraph):
+        self.graph = graph
+        self.path_history = deque(maxlen=1000)
+        self._setup_mind_openers()
+
+    def _setup_mind_openers(self):
+        """Initialize mind-opening transformations"""
+        self.transformations = [
+            self._reverse_perspective,
+            self._microscopic_view,
+            self.constrained_expression,
+            self._temporal_shift,
+            self._cross_domain_leap
+        ]
+        
+        self.emotional_filters = [
+            "through lens of joy",
+            "filtered by melancholy",
+            "with childlike wonder",
+            "as if time is running out",
+            "with detached curiosity"
+        ]
+
+    def explore_path(self, start_concept: str, 
+                    path_length: int = 4,
+                    exploration_strategy: str = "balanced") -> List[str]:
+        """
+        Generate a path through the conceptual graph
+        Args:
+            exploration_strategy: 
+                "balanced" - mix of similarity and diversity
+                "explore" - favor less connected nodes
+                "exploit" - stay close to starting concept
+        """
+        path = [start_concept]
+        current_concept = start_concept
+        
+        for _ in range(path_length - 1):
+            neighbors = self.graph.get_related_nodes(current_concept)
+            if not neighbors:
+                break
+                
+            # Adjust selection based on strategy
+            if exploration_strategy == "explore":
+                weights = [1/n['similarity'] for n in neighbors]
+            elif exploration_strategy == "exploit":
+                weights = [n['similarity'] for n in neighbors]
+            else:  # balanced
+                weights = [n['score'] for n in neighbors]
+                
+            # Normalize weights
+            total = sum(weights)
+            if total == 0:
+                next_node = random.choice(neighbors)
+            else:
+                norm_weights = [w/total for w in weights]
+                next_node = random.choices(neighbors, weights=norm_weights, k=1)[0]
+                
+            path.append(next_node['concept'])
+            current_concept = next_node['concept']
+            
+            # Update node activation
+            self.graph.nodes[current_concept].activation *= 1.1
+            self.graph.nodes[current_concept].last_accessed = asyncio.get_event_loop().time()
+        
+        return path
+
+    def apply_mind_opener(self, path: List[str]) -> List[str]:
+        """Apply transformative operations to the path"""
+        if len(path) < 2:
+            return path
+            
+        # Apply random transformation
+        transformed_path = random.choice(self.transformations)(path)
+        
+        # Add emotional filter
+        if random.random() > 0.7:  # 30% chance
+            transformed_path.append(random.choice(self.emotional_filters))
+            
+        return transformed_path
+
+    def _reverse_perspective(self, path: List[str]) -> List[str]:
+        """Reverse the narrative perspective"""
+        return [f"REVERSE:{node}" for node in reversed(path)]
+
+    def _microscopic_view(self, path: List[str]) -> List[str]:
+        """Zoom in on a microscopic detail"""
+        insert_point = random.randint(1, len(path)-1)
+        path.insert(insert_point, "MICROSCOPIC_ZOOM")
+        return path
+
+    def constrained_expression(self, path: List[str]) -> List[str]:
+        """Add creative constraints"""
+        constraints = [
+            "EXPRESS_AS_HAIKU",
+            "ONLY_PRIME_NUMBERED_STEPS",
+            "IN_MONOCHROME",
+            "WHILE_DROWNING"
+        ]
+        return path + [random.choice(constraints)]
+
+    def _temporal_shift(self, path: List[str]) -> List[str]:
+        """Shift to different time perspective"""
+        times = ["PREHISTORIC", "MEDIEVAL", "VICTORIAN", "FUTURISTIC"]
+        return [f"{random.choice(times)}:{node}" for node in path]
+
+    def _cross_domain_leap(self, path: List[str]) -> List[str]:
+        """Force a cross-domain jump"""
+        if len(path) < 3:
+            return path
+            
+        jump_point = random.randint(1, len(path)-1)
+        all_concepts = list(self.graph.nodes.keys())
+        foreign_concept = random.choice(all_concepts)
+        return path[:jump_point] + [f"CROSS_TO:{foreign_concept}"] + path[jump_point:]
+
+# --------------------------
+# Advanced Path Scoring
+# --------------------------
+
+class PathEvaluator:
+    def __init__(self, graph: ConceptualGraph):
+        self.graph = graph
+        self.model = graph.model
+        
+    def evaluate_path(self, path: List[str]) -> ExplorationPath:
+        """Comprehensive path evaluation"""
+        if not path:
+            return ExplorationPath(
+                nodes=[],
+                edges=[],
+                intuition_score=0,
+                diversity_score=0,
+                surprise_score=0,
+                coherence_score=0,
+                raw_representation=""
+            )
+            
+        # Calculate edge properties
+        edges = []
+        for i in range(len(path)-1):
+            from_node = path[i]
+            to_node = path[i+1]
+            similarity = self._get_edge_similarity(from_node, to_node)
+            edges.append({
+                'from': from_node,
+                'to': to_node,
+                'similarity': similarity,
+                'tags': self._get_edge_tags(from_node, to_node)
+            })
+        
+        # Calculate scores
+        diversity = self._calculate_diversity(path)
+        surprise = self._calculate_surprise(edges)
+        coherence = self._calculate_coherence(path)
+        intuition = 0.4*diversity + 0.3*surprise + 0.3*coherence
+        
+        return ExplorationPath(
+            nodes=path,
+            edges=edges,
+            intuition_score=intuition,
+            diversity_score=diversity,
+            surprise_score=surprise,
+            coherence_score=coherence,
+            raw_representation=" → ".join(path),
+            metadata={
+                'created_at': asyncio.get_event_loop().time(),
+                'generation_strategy': 'exploration'
+            }
+        )
+    
+    def _get_edge_similarity(self, node1: str, node2: str) -> float:
+        """Get semantic similarity between two nodes"""
+        if node1 in self.graph.nodes and node2 in self.graph.nodes:
+            return cosine_similarity(
+                self.graph.nodes[node1].embedding.reshape(1, -1),
+                self.graph.nodes[node2].embedding.reshape(1, -1)
+            )[0][0]
+        return 0.0
+    
+    def _get_edge_tags(self, node1: str, node2: str) -> Set[str]:
+        """Get shared tags between nodes"""
+        if node1 in self.graph.nodes and node2 in self.graph.nodes:
+            return self.graph.nodes[node1].tags & self.graph.nodes[node2].tags
+        return set()
+    
+    def _calculate_diversity(self, path: List[str]) -> float:
+        """Calculate tag diversity across path"""
+        if len(path) < 2:
+            return 0.0
+            
+        all_tags = set()
+        shared_tags = set(self.graph.nodes[path[0]].tags) if path[0] in self.graph.nodes else set()
+        
+        for node in path[1:]:
+            if node not in self.graph.nodes:
+                continue
+            node_tags = self.graph.nodes[node].tags
+            all_tags.update(node_tags)
+            shared_tags &= node_tags
+            
+        tag_diversity = len(all_tags) / (len(self.graph.nodes) or 1)
+        commonality_penalty = len(shared_tags) * 0.1
+        return max(0, min(1, tag_diversity - commonality_penalty))
+    
+    def _calculate_surprise(self, edges: List[Dict[str, Any]]) -> float:
+        """Calculate how surprising the transitions are"""
+        if len(edges) < 2:
+            return 0.0
+            
+        similarities = [e['similarity'] for e in edges]
+        avg_sim = sum(similarities) / len(similarities)
+        return 1 - avg_sim  # Lower average similarity = more surprise
+    
+    def _calculate_coherence(self, path: List[str]) -> float:
+        """Calculate overall path coherence"""
+        if len(path) < 2:
+            return 1.0
+            
+        # Check if path contains forced jumps
+        has_jumps = any(('JUMP_TO:' in node or 'CROSS_TO:' in node) for node in path)
+        if has_jumps:
+            return 0.6  # Slightly penalize coherence for mind-opener jumps
+            
+        # Otherwise calculate based on edge similarities
+        similarities = []
+        for i in range(len(path)-1):
+            similarities.append(self._get_edge_similarity(path[i], path[i+1]))
+        
+        return sum(similarities) / len(similarities) if similarities else 0.5
+
+# --------------------------
+# NeuralWebCore Engine
+# --------------------------
+
+class NeuralWebCore:
+    def __init__(self, persistence_file: Optional[Path] = None):
+        self.graph = ConceptualGraph(persistence_file)
+        self.explorer = PathExplorer(self.graph)
+        self.evaluator = PathEvaluator(self.graph)
+        self.idea_queue = asyncio.Queue()
+        self.running = False
+        self.generation_tasks = set()
+
+    async def generate_continuous(self, num_workers: int = 3):
+        """Run multiple concurrent generators"""
+        self.running = True
+        self.generation_tasks = {
+            asyncio.create_task(self._generation_worker(i))
+            for i in range(num_workers)
+        }
+        await asyncio.gather(*self.generation_tasks)
+
+    async def _generation_worker(self, worker_id: int):
+        """Individual generation worker"""
+        strategies = ["balanced", "explore", "exploit"]
+        while self.running:
+            try:
+                # Rotate through different exploration strategies
+                strategy = strategies[worker_id % len(strategies)]
+                
+                # Select starting concept
+                start_concept = self._select_starting_concept()
+                
+                # Generate and process path
+                path = self.explorer.explore_path(
+                    start_concept,
+                    path_length=random.randint(3, 6),
+                    exploration_strategy=strategy
+                )
+                opened_path = self.explorer.apply_mind_opener(path)
+                scored_path = self.evaluator.evaluate_path(opened_path)
+                
+                await self.idea_queue.put(scored_path)
+                await asyncio.sleep(random.uniform(0.1, 0.5))
+                
+            except Exception as e:
+                logger.error(f"Worker {worker_id} failed: {str(e)}")
+                await asyncio.sleep(1)
+
+    def _select_starting_concept(self) -> str:
+        """Select starting concept with exploration/exploitation balance"""
+        # 70% chance to pick from recently active nodes
+        if random.random() < 0.7 and self.graph.nodes:
+            recent_nodes = sorted(
+                self.graph.nodes.values(),
+                key=lambda n: n.last_accessed,
+                reverse=True
+            )[:20]
+            if recent_nodes:
+                weights = [n.activation for n in recent_nodes]
+                total = sum(weights)
+                norm_weights = [w/total for w in weights]
+                return random.choices(
+                    [n.concept for n in recent_nodes],
+                    weights=norm_weights,
+                    k=1
+                )[0]
+        
+        # Fallback to random selection
+        return random.choice(list(self.graph.nodes.keys())) if self.graph.nodes else "concept"
+
+    async def idea_stream(self) -> AsyncIterable[ExplorationPath]:
+        """Stream evaluated paths"""
+        while self.running or not self.idea_queue.empty():
+            try:
+                yield await asyncio.wait_for(self.idea_queue.get(), timeout=1)
+            except asyncio.TimeoutError:
+                pass
+
+    async def shutdown(self):
+        """Graceful shutdown"""
+        self.running = False
+        if self.generation_tasks:
+            await asyncio.wait(self.generation_tasks)
+        self.graph.save_graph()
+        logger.info("NeuralWebCore shutdown complete")
+
+# --------------------------
+# Example Usage
+# --------------------------
+
+async def interactive_demo():
+    # Initialize with persistence
+    persistence_file = Path("neural_web_graph.json")
+    core = NeuralWebCore(persistence_file)
+    
+    # Add custom concepts
+    core.graph.add_node("system analyzer", {"tech", "analysis"})
+    core.graph.add_node("creative intuition", {"cognitive", "art"})
+    core.graph.build_connections()
+    
+    # Start generation
+    gen_task = asyncio.create_task(core.generate_continuous())
+    
+    # Consume and display ideas
+    try:
+        async for path in core.idea_stream():
+            print(f"\n=== New Path (Score: {path.intuition_score:.2f}) ===")
+          
