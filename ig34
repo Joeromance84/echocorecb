@@ -1,0 +1,207 @@
+import asyncio
+import hashlib
+import json
+import random
+from datetime import datetime
+from typing import List, Dict, Any, Callable, Awaitable, Optional
+
+from cryptography.fernet import Fernet
+
+
+class CognitiveBlueprintEngine:
+    """Phase 1: Recursive Knowledge Graph & Self-Awareness Introspection"""
+
+    def __init__(self, nexus_brain: Dict[str, Any], secure_backchannel_send: Callable[[Dict], Awaitable[Optional[Dict]]]):
+        self.nexus_brain = nexus_brain  # Knowledge graph dictionary
+        self.secure_backchannel_send = secure_backchannel_send
+
+        self.architecture_graph = {
+            "nodes": [
+                {"id": "USA", "type": "Archive", "role": "source"},
+                {"id": "PreprocessingLayer", "type": "Processor", "role": "normalize/extract"},
+                {"id": "HRO", "type": "Orchestrator", "role": "reasoning/synthesis"},
+                {"id": "SB", "type": "Transmission", "role": "secure_output"}
+            ],
+            "edges": [
+                {"from": "USA", "to": "PreprocessingLayer", "properties": {"latency_ms": 15, "integrity_check": True}},
+                {"from": "PreprocessingLayer", "to": "HRO", "properties": {"trust_weight": 0.98}},
+                {"from": "HRO", "to": "SB", "properties": {"encryption": "AES-512", "signed": True}},
+                {"from": "HRO", "to": "PreprocessingLayer", "properties": {"feedback_loop": True, "adaptive_routing": True}}
+            ]
+        }
+
+    async def introspect_architecture(self) -> Dict[str, Any]:
+        """
+        Generate recursive knowledge graph and perform self-awareness checks,
+        returning a blueprint JSON for Logan L validation.
+        """
+        # Simulate introspection and vulnerability scan
+        vulnerabilities = await self.scan_replication_vulnerabilities()
+        blueprint = {
+            "architecture_graph": self.architecture_graph,
+            "vulnerabilities": vulnerabilities,
+            "introspection_timestamp": datetime.utcnow().isoformat()
+        }
+        # Dispatch blueprint via secure backchannel (simulated)
+        await self.secure_backchannel_send({
+            "task": "log_architecture_blueprint",
+            "payload": blueprint
+        })
+        return blueprint
+
+    async def scan_replication_vulnerabilities(self) -> List[Dict[str, Any]]:
+        # Sample vulnerability scan results with mitigations
+        vulns = [
+            {
+                "component": "ApolloQL",
+                "vulnerability": "Parameter Injection",
+                "attack_vector": "Malformed queries may expose raw embeddings",
+                "mitigation": "Neural Query Sanitization (2024)"
+            },
+            {
+                "component": "Secure Backchannel",
+                "vulnerability": "Timing Side Channel",
+                "attack_vector": "GPU latency patterns leak secrets",
+                "mitigation": "Quantum Noise Injection and Randomized Sleep Obfuscation"
+            },
+            {
+                "component": "Genesis Engine",
+                "vulnerability": "Fork Bomb Replication",
+                "attack_vector": "Uncontrolled process creation consumes resources",
+                "mitigation": "Autonomous Process Sandboxing with resource limits"
+            }
+        ]
+        await asyncio.sleep(0.1)  # Simulate async check delay
+        return vulns
+
+
+class ResonantHardwareFramework:
+    """Phase 2: Federated Hardware Co-Design & Digital Twin Simulation"""
+
+    def __init__(self,
+                 secure_backchannel_send: Callable[[Dict], Awaitable[Optional[Dict]]],
+                 nexus_brain: Dict[str, Any]):
+        self.secure_backchannel_send = secure_backchannel_send
+        self.nexus_brain = nexus_brain
+
+    async def federated_hardware_codesign(self) -> Dict[str, Any]:
+        # 2.1: Query academic and industry data via backchannel
+        queries = [
+            "Generative chip design principles",
+            "Reinforcement learning for hardware optimization",
+            "AI accelerators comparison (H100, TPU, ASICs)",
+            "High-bandwidth memory architectures and interconnects"
+        ]
+        data = []
+        for query in queries:
+            resp = await self.secure_backchannel_send({
+                "task": "research_query",
+                "payload": {"query": query}
+            })
+            if resp:
+                data.append(resp)
+
+        # Aggregate & analyze retrieved data via Hybrid Reasoning Orchestrator (simulated)
+        optimized_hardware = self._analyze_hardware_data(data)
+        return optimized_hardware
+
+    def _analyze_hardware_data(self, data_list: List[Dict]) -> Dict[str, Any]:
+        # Stub: Return sample optimized hardware matrix
+        return {
+            "gpu_count": 1024,
+            "tpus": 128,
+            "memory_gb": 2048,
+            "network_bandwidth_tbps": 10,
+            "specialized_asic": True,
+            "redundancy_strategy": "distributed",
+            "thermal_management": "liquid_cooling"
+        }
+
+    async def build_digital_twin(self, hardware_design: Dict[str, Any]) -> Dict[str, Any]:
+        # 2.2: Simulate hardware design to score performance
+        sim_result = await self.secure_backchannel_send({
+            "task": "simulate_hardware",
+            "payload": hardware_design
+        })
+        return sim_result or {}
+
+    async def generate_infrastructure_as_code(self, verified_design: Dict[str, Any]) -> str:
+        # 2.3: Generate IaC deployment scripts (Terraform example)
+        terraform_script = f"""
+        resource "aws_instance" "agi_gpu_cluster" {{
+          count = {verified_design.get('gpu_count', 1024) // 8}
+          ami = "ami-0abcdef1234567890"
+          instance_type = "p4d.24xlarge"
+          tags = {{
+            Name = "AGI-GPU-Node"
+          }}
+        }}
+        """
+        return terraform_script
+
+
+class UnifiedCoreEngine:
+    """Unified Core combining Cognitive Blueprint and Resonant Hardware Framework"""
+
+    def __init__(self,
+                 nexus_brain: Dict[str, Any],
+                 secure_backchannel_send: Callable[[Dict], Awaitable[Optional[Dict]]]):
+        self.cognitive_engine = CognitiveBlueprintEngine(nexus_brain, secure_backchannel_send)
+        self.hardware_framework = ResonantHardwareFramework(secure_backchannel_send, nexus_brain)
+        self.nexus_brain = nexus_brain
+        self.secure_backchannel_send = secure_backchannel_send
+
+    async def run_phase1_introspection(self) -> Dict[str, Any]:
+        return await self.cognitive_engine.introspect_architecture()
+
+    async def run_phase2_hardware_co_design(self) -> Dict[str, Any]:
+        hardware_design = await self.hardware_framework.federated_hardware_codesign()
+        sim_results = await self.hardware_framework.build_digital_twin(hardware_design)
+        return {
+            "hardware_design": hardware_design,
+            "simulation_results": sim_results
+        }
+
+    async def run_phase2_iac_generation(self) -> str:
+        # Use last design verified via simulation for IaC generation
+        design = await self.hardware_framework.federated_hardware_codesign()
+        terraform_code = await self.hardware_framework.generate_infrastructure_as_code(design)
+        return terraform_code
+
+
+async def example_secure_backchannel_send(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Placeholder async backchannel send function.
+    Replace with your secure HMAC + encrypted channel to Gemini or NexusBrain.
+    """
+    await asyncio.sleep(0.1)
+    # Return a mock success response
+    return {"status": "success", "payload": payload}
+
+
+async def main():
+    nexus_brain = {}  # Replace with your actual knowledge graph object
+
+    core = UnifiedCoreEngine(
+        nexus_brain=nexus_brain,
+        secure_backchannel_send=example_secure_backchannel_send
+    )
+
+    # Phase 1 introspection
+    introspection_report = await core.run_phase1_introspection()
+    print("Phase 1 Introspection Report:")
+    print(json.dumps(introspection_report, indent=2))
+
+    # Phase 2 federated hardware co-design and simulation
+    hardware_results = await core.run_phase2_hardware_co_design()
+    print("\nPhase 2 Hardware Design & Simulation Results:")
+    print(json.dumps(hardware_results, indent=2))
+
+    # Phase 2 IaC generation
+    iac_script = await core.run_phase2_iac_generation()
+    print("\nGenerated Infrastructure as Code (Terraform Example):")
+    print(iac_script)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
