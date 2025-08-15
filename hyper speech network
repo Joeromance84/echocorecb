@@ -1,0 +1,339 @@
+"""
+Atlas HyperSpeech Network (V2)
+------------------------------
+This is a more detailed implementation of the self-evolving speech intelligence
+system, focusing on concrete functionality for adaptive processing, multi-objective
+optimization, and cross-modal knowledge transfer.
+"""
+
+# --- IMPORTS (Added) ---
+import time
+import uuid
+import random
+import torch.nn.functional as F
+
+# Assuming these custom modules exist and are functional
+from genetic_algorithm import GeneticOptimizer  
+from hardware_profiler import HWProfiler  
+
+# --- Constants & Core Types (as before) ---
+SAMPLING_RATE = 16000
+CHUNK_DURATION_MS = 30
+MAX_STREAMS_PER_NODE = 50
+
+class NodeType(Enum):
+    TTS = auto()
+    ASR = auto()
+    PROSODY = auto()
+    VOICE_CLONING = auto()
+
+@dataclass 
+class NodeMetrics:
+    latency: float
+    accuracy: float
+    stability: float
+    energy_eff: float
+    hardware_comp: float
+    overall_score: float = 0.0
+
+@dataclass
+class StreamState:
+    buffer: deque
+    last_processed: float
+    adapt_factor: float = 1.0
+
+# --- Core Neural Modules (with implementation) ---  
+class AdaptiveConv(nn.Module):
+    """Hardware-efficient convolution with dynamic kernel sizing"""
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.base_kernel = 3
+        # We need a learnable weight, not a new one each time
+        self.conv_weight = nn.Parameter(torch.randn(out_channels, in_channels, 9))
+    
+    def forward(self, x):
+        b, c, t = x.shape
+        optimal_k = max(3, min(9, t // 8))  # Dynamic kernel sizing
+        padding = (optimal_k - 1) // 2
+        
+        # Select a slice of the pre-initialized weight
+        kernel = self.conv_weight[:, :, :optimal_k]
+        
+        return F.conv1d(
+            x, 
+            weight=kernel,
+            padding=padding
+        )
+
+# --- Node Architectures (with implementation) ---
+class HyperSpeechNode(nn.Module):
+    def __init__(self, node_type: NodeType, hw_profile: Dict):
+        super().__init__()
+        self.node_type = node_type
+        self.hw_profile = hw_profile
+        
+        self.architecture_params = {
+            'num_layers': random.randint(2, 5), # Smaller for realism
+            'width_factor': random.uniform(0.5, 1.5),
+            'attention_heads': random.choice([2, 4])
+        }
+        
+        self.encoder = self._build_encoder()
+        self.stream_states: Dict[str, StreamState] = {}
+        
+    def _build_encoder(self):
+        """Builds a neural network based on architectural parameters."""
+        layers = []
+        in_dim = int(SAMPLING_RATE * CHUNK_DURATION_MS / 1000)
+        out_dim = in_dim
+        
+        for i in range(self.architecture_params['num_layers']):
+            current_dim = int(out_dim * self.architecture_params['width_factor'])
+            layers.extend([
+                AdaptiveConv(in_channels=1, out_channels=1), # Simplified for demo
+                nn.GELU(),
+                nn.LayerNorm(current_dim)
+            ])
+            out_dim = current_dim
+        
+        return nn.Sequential(*layers)
+    
+    def _preprocess(self, chunk: bytes) -> torch.Tensor:
+        """Converts raw bytes to a PyTorch tensor."""
+        # Simple placeholder for real audio processing
+        audio_tensor = torch.frombuffer(chunk, dtype=torch.int16).float()
+        return audio_tensor.unsqueeze(0).unsqueeze(0) # (B, C, T)
+
+    def _process_window(self, buffer: deque) -> torch.Tensor:
+        """Processes a window of the buffer."""
+        # Take a fixed-size window from the left of the deque
+        window_size = 1000 # Example window size
+        if len(buffer) < window_size:
+            return torch.tensor([])
+        
+        window_tensor = torch.tensor(list(buffer)[:window_size])
+        
+        # Pop processed items from the buffer
+        for _ in range(window_size):
+            buffer.popleft()
+            
+        # Run the forward pass on the tensor
+        return self.encoder(window_tensor.unsqueeze(0).unsqueeze(0))
+
+    async def process_stream(self, stream_id: str, audio_stream: AsyncGenerator[bytes, None]) -> AsyncGenerator[torch.Tensor, None]:
+        """Real-time streaming with adaptive buffering."""
+        self.stream_states[stream_id] = StreamState(deque(), time.time())
+        
+        async for chunk in audio_stream:
+            state = self.stream_states[stream_id]
+            state.buffer.extend(self._preprocess(chunk))
+            
+            # Adaptive processing based on load
+            while len(state.buffer) >= self._optimal_chunk_size(state):
+                processed = self._process_window(state.buffer)
+                yield processed
+                state.last_processed = time.time()
+            
+            # Dynamic adjustment
+            current_latency = time.time() - state.last_processed
+            # Simple PID-like controller for adapt_factor
+            state.adapt_factor += 0.01 * (50 - current_latency)
+            state.adapt_factor = max(0.5, min(2.0, state.adapt_factor))
+
+    def _optimal_chunk_size(self, state: StreamState):
+        base_size = int(SAMPLING_RATE * CHUNK_DURATION_MS / 1000)
+        return int(base_size * state.adapt_factor)
+        
+    def _calc_accuracy(self, output, target):
+        """Calculates a placeholder accuracy score."""
+        # In a real model, this would compare model output to ground truth.
+        return 1 - F.mse_loss(output, target).item()
+
+# --- Evolutionary Engine (Refined) ---
+class NodeEvolver:
+    def __init__(self, target_metrics: Dict[str, float]):
+        self.ga = GeneticOptimizer(
+            population_size=50,
+            mutation_rate=0.15,
+            crossover_rate=0.7,
+            objectives=['latency', 'accuracy', 'energy']
+        )
+        self.target_metrics = target_metrics
+
+    def _calculate_fitness(self, metrics: NodeMetrics) -> float:
+        """Multi-objective fitness function."""
+        # We need to normalize metrics and combine them.
+        # This is a key part of multi-objective optimization.
+        norm_latency = 1.0 / (metrics.latency / self.target_metrics['latency'])
+        norm_accuracy = metrics.accuracy / self.target_metrics['accuracy']
+        norm_energy = 1.0 / (metrics.energy_eff / self.target_metrics['energy'])
+        
+        # A simple weighted average. Atlas could learn these weights over time.
+        return (norm_latency * 0.3) + (norm_accuracy * 0.5) + (norm_energy * 0.2)
+
+    async def evolve_node(self, node: HyperSpeechNode, eval_data: List) -> HyperSpeechNode:
+        """Run one evolutionary cycle."""
+        metrics = await self._evaluate_node(node, eval_data)
+        metrics.overall_score = self._calculate_fitness(metrics)
+        
+        offspring_params = self.ga.generate_offspring(
+            parent_architectures=[node.architecture_params],
+            parent_scores=[metrics.overall_score]
+        )
+        
+        new_node = HyperSpeechNode(node.node_type, node.hw_profile)
+        new_node.architecture_params = offspring_params[0]
+        return new_node
+
+    async def _evaluate_node(self, node: HyperSpeechNode, eval_data: List) -> NodeMetrics:
+        """Multi-objective evaluation."""
+        latency, accuracy, energy = 0, 0, 0
+        for data in eval_data:
+            # Simple mock evaluation
+            start = time.time()
+            output = node(data)
+            latency += time.time() - start
+            accuracy += self._calc_accuracy(output, data.target)
+            energy += HWProfiler.measure_energy(node)
+            
+        return NodeMetrics(
+            latency=latency / len(eval_data),
+            accuracy=accuracy / len(eval_data),
+            stability=1.0, # Placeholder
+            energy_eff=energy / len(eval_data),
+            hardware_comp=1.0 # Placeholder
+        )
+
+# --- Cross-Modal Knowledge Transfer ---
+class KnowledgeTransfer:
+    def __init__(self, speech_farm: 'SpeechFarm'):
+        self.farm = speech_farm
+        self.asr_encoder = self._get_encoder(NodeType.ASR)
+        self.tts_encoder = self._get_encoder(NodeType.TTS)
+    
+    def _get_encoder(self, node_type: NodeType):
+        # Find the best node of a given type and return its encoder
+        best_node = max(
+            self.farm.nodes[node_type],
+            key=lambda n: n.metrics.overall_score
+        )
+        return best_node.encoder
+        
+    def fuse_representations(self, asr_audio_embedding, tts_text_embedding):
+        """
+        Fuses embeddings from different modalities.
+        This is a core, innovative step where Atlas learns from the intersection
+        of different data types.
+        """
+        # A simple concatenation for demo. In reality, this could be a complex
+        # fusion network.
+        fused_embedding = torch.cat([asr_audio_embedding, tts_text_embedding], dim=1)
+        return fused_embedding
+        
+    def transfer_knowledge(self, source_type: NodeType, target_type: NodeType):
+        """
+        Transfers learned representations from one node type to another
+        to accelerate learning.
+        """
+        source_encoder = self._get_encoder(source_type)
+        target_encoder = self._get_encoder(target_type)
+        
+        # In a real system, this would involve a complex fine-tuning process
+        # on the target encoder using the source's knowledge.
+        # For demonstration, we'll just log the action.
+        logging.info(f"Transferring knowledge from {source_type.name} to {target_type.name}")
+
+# --- Farm Orchestration (Refined) ---
+class SpeechFarm:
+    def __init__(self):
+        self.nodes: Dict[NodeType, List[HyperSpeechNode]] = {
+            t: [] for t in NodeType
+        }
+        self.evolvers: Dict[NodeType, NodeEvolver] = {}
+        self.hw_profiler = HWProfiler()
+        self.knowledge_transfer = KnowledgeTransfer(self) # Now initialized with self
+
+    async def spawn_node(self, node_type: NodeType) -> HyperSpeechNode:
+        """Create new node with hardware-aware architecture."""
+        hw_profile = self.hw_profiler.current_profile()
+        node = HyperSpeechNode(node_type, hw_profile)
+        
+        if node_type not in self.evolvers:
+            self.evolvers[node_type] = NodeEvolver(
+                target_metrics={'latency': 50, 'accuracy': 0.95, 'energy': 5}
+            )
+            
+        self.nodes[node_type].append(node)
+        return node
+    
+    async def optimize_cluster(self, node_type: NodeType, cycles=5):
+        """Evolve a group of nodes."""
+        for _ in range(cycles):
+            next_gen = []
+            for node in self.nodes[node_type]:
+                eval_data = self._get_eval_data(node_type)
+                improved_node = await self.evolvers[node_type].evolve_node(node, eval_data)
+                next_gen.append(improved_node)
+            
+            # Select top performers based on the new, more sophisticated fitness score
+            self.nodes[node_type] = sorted(
+                next_gen,
+                key=lambda n: n.metrics.overall_score,
+                reverse=True
+            )[:MAX_STREAMS_PER_NODE//2]
+            
+            while len(self.nodes[node_type]) < MAX_STREAMS_PER_NODE:
+                await self.spawn_node(node_type)
+
+    def _get_eval_data(self, node_type: NodeType):
+        """Mock data retrieval."""
+        return [{'data': torch.randn(1, 1, 1000), 'target': torch.randn(1, 1, 1000)}]
+
+# --- Real-Time Controller (Refined) ---
+class AtlasSpeechController:
+    def __init__(self):
+        self.farm = SpeechFarm()
+        # StreamRouter is now assumed to be part of the SpeechFarm's logic
+        
+    async def handle_tts_request(self, text_stream):
+        """End-to-end TTS processing."""
+        tts_node = max(
+            self.farm.nodes[NodeType.TTS],
+            key=lambda n: n.metrics.overall_score
+        )
+        
+        # The stream processing is now handled by the node itself
+        async for audio_chunk in tts_node.process_stream(str(uuid.uuid4()), text_stream):
+            yield audio_chunk
+            
+        # The node's metrics are updated by the orchestrator, not here
+        
+# --- Main Service Loop ---
+async def main():
+    atlas = AtlasSpeechController()
+    
+    # Initial cluster
+    await asyncio.gather(
+        atlas.farm.spawn_node(NodeType.TTS),
+        atlas.farm.spawn_node(NodeType.ASR),
+        atlas.farm.spawn_node(NodeType.PROSODY)
+    )
+    
+    # Continuous optimization
+    while True:
+        await asyncio.sleep(3600)  # Hourly optimization
+        
+        # Evolve the TTS cluster
+        await atlas.farm.optimize_cluster(NodeType.TTS)
+        
+        # Evolve the ASR cluster
+        await atlas.farm.optimize_cluster(NodeType.ASR)
+        
+        # Transfer knowledge between them
+        atlas.farm.knowledge_transfer.transfer_knowledge(NodeType.ASR, NodeType.TTS)
+        atlas.farm.knowledge_transfer.transfer_knowledge(NodeType.TTS, NodeType.ASR)
+
+if __name__ == "__main__":
+    asyncio.run(main())
