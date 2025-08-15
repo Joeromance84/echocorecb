@@ -1,0 +1,400 @@
+import asyncio
+import math
+import random
+from dataclasses import dataclass, field
+from typing import Dict, List, Any, AsyncIterable, Optional, Tuple
+import numpy as np
+from scipy import signal
+import logging
+from enum import Enum, auto
+import string
+from datetime import datetime
+
+# --------------------------
+# Core Disruption Types
+# --------------------------
+
+class ChaosState(Enum):
+    DORMANT = auto()
+    STABLE = auto()
+    TURBULENT = auto()
+    FLUX = auto()
+
+@dataclass
+class ConflictingHarmonic:
+    frequency: float  # Hz
+    amplitude: float  # 0-1
+    waveform: str     # sine/triangle/square/sawtooth
+
+@dataclass
+class DisruptionOutput:
+    content: Any
+    harmonics: List[ConflictingHarmonic]
+    tension_index: float  # 0-1
+    stability_broken: bool
+    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+
+# --------------------------
+# Core Disruption Engine
+# --------------------------
+
+class DisruptionEngine:
+    """
+    Disruption engine that generates composite waveforms and infuses 'disruption'
+    into incoming content. Designed to be configurable, observable, and
+    cleanly stoppable.
+    """
+    def __init__(
+        self,
+        base_frequency: float = 0.2,
+        sample_rate: int = 10,
+        initial_tension: float = 0.35,
+        rng_seed: Optional[int] = None,
+        logger_level: int = logging.INFO,
+        agitation_gain: float = 0.05,
+        amplitude_gain_when_high_tension: float = 1.05
+    ):
+        if rng_seed is not None:
+            random.seed(rng_seed)
+            np.random.seed(rng_seed)
+        self.base_frequency = float(base_frequency)
+        self.sample_rate = int(max(1, sample_rate))
+        self.tension_index = float(max(0.0, min(1.0, initial_tension)))
+        self.harmonics = self._init_harmonics()
+        self.stability_buffer: List[float] = []
+        self.stop_event = asyncio.Event()
+        self._generator_task: Optional[asyncio.Task] = None
+
+        # config knobs
+        self.agitation_gain = agitation_gain
+        self.amp_gain = amplitude_gain_when_high_tension
+
+        # logging
+        self._setup_logging(level=logger_level)
+
+    def _setup_logging(self, level=logging.INFO):
+        self.logger = logging.getLogger("disruption_engine")
+        if not self.logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter(
+                "[%(asctime)s] [DISRUPTION] %(levelname)s: %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S"
+            )
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+        self.logger.setLevel(level)
+
+    def _init_harmonics(self) -> List[ConflictingHarmonic]:
+        return [
+            ConflictingHarmonic(frequency=self.base_frequency, amplitude=0.8, waveform="sine"),
+            ConflictingHarmonic(frequency=self.base_frequency * 5, amplitude=0.5, waveform="sawtooth"),
+            ConflictingHarmonic(frequency=0.05, amplitude=0.4, waveform="square")  # ultra low-freq destabilizer
+        ]
+
+    async def run_continuous(self):
+        """Main agitation loop. Can be started as a background task."""
+        self.logger.info("Starting disruption generator loop.")
+        self.stop_event.clear()
+        try:
+            while not self.stop_event.is_set():
+                await self._monitor_state()
+                # emit disruption signal (side-effect free)
+                _ = await self._emit_disruption_signal()
+                await asyncio.sleep(1.0 / self.sample_rate)
+        except asyncio.CancelledError:
+            self.logger.info("Generator task cancelled.")
+            raise
+        except Exception as e:
+            self.logger.exception("Generator loop failed: %s", e)
+            raise
+        finally:
+            self.logger.info("Generator loop finished.")
+
+    async def start(self):
+        """Convenience to spawn the generator as a task."""
+        if self._generator_task is None or self._generator_task.done():
+            self._generator_task = asyncio.create_task(self.run_continuous())
+            self.logger.info("Generator task created.")
+        return self._generator_task
+
+    async def stop(self):
+        """Graceful stop: signal, cancel background generator, wait for it."""
+        self.logger.info("Stop requested.")
+        self.stop_event.set()
+        if self._generator_task:
+            self._generator_task.cancel()
+            try:
+                await self._generator_task
+            except asyncio.CancelledError:
+                self.logger.debug("Generator task cancellation confirmed.")
+            self._generator_task = None
+        self.logger.info("Disruption engine stopped.")
+
+    async def _monitor_state(self):
+        """
+        Analyze and update the internal tension index.
+        external_stability is sampled as a small random factor for now.
+        High external stability should reduce tension (i.e., be calming).
+        """
+        external_stability = random.random() * 0.3  # more variance allowed here
+
+        # if the environment is stable, tension should drop; otherwise it may slowly rise
+        if external_stability > 0.18:
+            old = self.tension_index
+            self.tension_index = max(0.0, self.tension_index - 0.08)  # calm down when stability is detected
+            self.logger.debug("External stability %.2f -> tension %.2f->%.2f", external_stability, old, self.tension_index)
+        else:
+            old = self.tension_index
+            self.tension_index = min(1.0, self.tension_index + 0.02)  # slow drift upward when no stability
+            self.logger.debug("No strong stability (%.2f). Tension drift %.2f->%.2f", external_stability, old, self.tension_index)
+
+        self._auto_tune_harmonics()
+
+    def _auto_tune_harmonics(self):
+        """Adjust harmonics to increase or relax tension smoothly."""
+        target_freq = self.base_frequency * (1.0 + 0.8 * self.tension_index)
+        for i, harmonic in enumerate(self.harmonics):
+            # Move frequency slightly toward (or away) from target to create conflict
+            desired = target_freq * (i + 1) * (1.0 + 0.1 * math.sin(self.tension_index * 10 + i))
+            harmonic.frequency += (desired - harmonic.frequency) * self.agitation_gain
+
+            # amplitude modulation depending on tension
+            if self.tension_index > 0.6:
+                harmonic.amplitude = min(1.0, harmonic.amplitude * self.amp_gain)
+            else:
+                harmonic.amplitude = max(0.05, harmonic.amplitude * 0.995)
+
+        self.logger.debug("Harmonics tuned: %s", [(h.frequency, round(h.amplitude, 3), h.waveform) for h in self.harmonics])
+
+    async def _emit_disruption_signal(self) -> DisruptionOutput:
+        """
+        Return the current waveform snapshot as DisruptionOutput.
+        This function is cheap and safe to call frequently.
+        """
+        waveform = self._generate_waveform(duration=1.0)
+        return DisruptionOutput(
+            content=waveform,
+            harmonics=[ConflictingHarmonic(h.frequency, h.amplitude, h.waveform) for h in self.harmonics],
+            tension_index=self.tension_index,
+            stability_broken=self.tension_index > 0.7
+        )
+
+    def _generate_waveform(self, duration: float = 1.0) -> np.ndarray:
+        """
+        Build composite waveform from harmonics. Clip to [-1, 1] to avoid runaway amplitude.
+        """
+        if duration <= 0:
+            duration = 1.0
+        num_samples = int(max(1, round(self.sample_rate * duration)))
+        t = np.linspace(0, duration, num_samples, endpoint=False)
+        composite = np.zeros_like(t, dtype=float)
+
+        for h in self.harmonics:
+            if h.amplitude <= 0:
+                continue
+            freq = max(1e-6, float(h.frequency))
+            if h.waveform == "sine":
+                composite += float(h.amplitude) * np.sin(2 * np.pi * freq * t)
+            elif h.waveform == "sawtooth":
+                composite += float(h.amplitude) * signal.sawtooth(2 * np.pi * freq * t)
+            elif h.waveform == "square":
+                composite += float(h.amplitude) * signal.square(2 * np.pi * freq * t)
+            elif h.waveform == "triangle":
+                composite += float(h.amplitude) * signal.sawtooth(2 * np.pi * freq * t, width=0.5)
+            else:
+                # fallback to sine for unknown waveform
+                composite += float(h.amplitude) * np.sin(2 * np.pi * freq * t)
+
+        # Normalize/clamp
+        max_abs = np.max(np.abs(composite)) if composite.size else 1.0
+        if max_abs > 0:
+            composite = composite / max(1.0, max_abs)
+        composite = np.clip(composite, -1.0, 1.0)
+        return composite
+
+    async def disrupt_output(self, content: Any) -> DisruptionOutput:
+        """
+        Infuse external content with disruption. Stability analysis returns a float:
+        - higher positive => more 'calm' indicators present (we invert so calm lowers instability)
+        """
+        stability_score = self._analyze_stability(content)
+        self.stability_buffer.append(stability_score)
+        # average recent stability to decide whether to apply filter
+        recent = np.mean(self.stability_buffer[-10:]) if self.stability_buffer else stability_score
+
+        modified = content
+        if recent > 0.6:
+            # If content is very calm, we intentionally disrupt it
+            modified = self._apply_disruption_filter(content)
+            self.logger.info("Disrupted stable content (stability=%.2f)", float(recent))
+
+        # adjust tension slightly based on whether we disturbed something
+        if isinstance(modified, str) and modified != content:
+            self.tension_index = min(1.0, self.tension_index + 0.03)
+        else:
+            self.tension_index = max(0.0, self.tension_index - 0.01)
+
+        return DisruptionOutput(
+            content=modified,
+            harmonics=[ConflictingHarmonic(h.frequency, h.amplitude, h.waveform) for h in self.harmonics],
+            tension_index=self.tension_index,
+            stability_broken=recent > 0.4
+        )
+
+    def _analyze_stability(self, content: Any) -> float:
+        """
+        Analyze content for calm/conflict markers.
+        Returns a score in [0,1] where larger means more 'calm' signals detected.
+        """
+        if isinstance(content, str):
+            calm_words = {"peace": 1.0, "calm": 0.9, "flow": 0.8, "balance": 0.9, "harmony": 1.0}
+            conflict_words = {"error": 1.0, "crash": 1.0, "urgent": 0.9, "danger": 1.0, "attack": 1.0}
+
+            text = content.lower().translate(str.maketrans("", "", string.punctuation))
+            tokens = text.split()
+            calm_score = sum(calm_words.get(tok, 0.0) for tok in tokens)
+            conflict_score = sum(conflict_words.get(tok, 0.0) for tok in tokens)
+
+            # normalize by token count to avoid long-text bias
+            denom = max(1, len(tokens))
+            raw = (calm_score - conflict_score) / denom
+            # scale to 0..1 with tanh-like mapping
+            scaled = (math.tanh(raw * 2.0) + 1.0) / 2.0
+            return float(max(0.0, min(1.0, scaled)))
+        else:
+            # non-text content: return a small random baseline
+            return float(min(1.0, max(0.0, 0.15 + random.random() * 0.2)))
+
+    def _apply_disruption_filter(self, content: Any) -> Any:
+        """Transform content to be more disruptive (string rules)."""
+        if isinstance(content, str):
+            replacements = {
+                "balance": "imbalance",
+                "flow": "collision",
+                "calm": "unrest",
+                "peace": "friction",
+                "harmony": "dissonance"
+            }
+            # preserve case by doing a lower->replace and then reapply rudimentary capitalization
+            lowered = content
+            for calm, tense in replacements.items():
+                lowered = lowered.replace(calm, tense)
+                lowered = lowered.replace(calm.capitalize(), tense.capitalize())
+            return lowered
+        return content
+
+    def inject_perturbation(self, freq_shift: float = 0.05, amp_shift: float = 0.05):
+        """
+        External interface to nudge harmonics: shifts frequency/amplitude by small amounts.
+        """
+        for h in self.harmonics:
+            old_f, old_a = h.frequency, h.amplitude
+            h.frequency += random.uniform(-freq_shift, freq_shift) * max(1.0, h.frequency)
+            h.amplitude = max(0.0, min(1.0, h.amplitude + random.uniform(-amp_shift, amp_shift)))
+            self.logger.debug("Perturbed harmonic %s: freq %.3f->%.3f amp %.3f->%.3f", h.waveform, old_f, h.frequency, old_a, h.amplitude)
+        # nudging overall tension a bit
+        self.tension_index = max(0.0, min(1.0, self.tension_index + random.uniform(-0.02, 0.05)))
+
+    def chaos_state(self) -> ChaosState:
+        """Derive a symbolic state from the tension index."""
+        t = self.tension_index
+        if t < 0.25:
+            return ChaosState.DORMANT
+        if t < 0.5:
+            return ChaosState.STABLE
+        if t < 0.8:
+            return ChaosState.TURBULENT
+        return ChaosState.FLUX
+
+    def snapshot_harmonics(self) -> List[Tuple[float, float, str]]:
+        return [(h.frequency, h.amplitude, h.waveform) for h in self.harmonics]
+
+# --------------------------
+# Integration Adapter
+# --------------------------
+
+class SystemDisruptor:
+    """Bridge between a disruption engine and a producer/consumer queue pair."""
+    def __init__(self, disruption_engine: DisruptionEngine):
+        self.disruptor = disruption_engine
+        self.connected_systems: Dict[str, Tuple[asyncio.Queue, asyncio.Queue, asyncio.Task]] = {}
+
+    async def connect_system(self, system_name: str, input_q: asyncio.Queue, output_q: asyncio.Queue):
+        if system_name in self.connected_systems:
+            raise RuntimeError(f"System {system_name} already connected.")
+        task = asyncio.create_task(self._disrupt_system(system_name, input_q, output_q))
+        self.connected_systems[system_name] = (input_q, output_q, task)
+        self.disruptor.logger.info("Connected system '%s' for disruption.", system_name)
+        return task
+
+    async def disconnect_system(self, system_name: str):
+        if system_name not in self.connected_systems:
+            return
+        _, _, task = self.connected_systems.pop(system_name)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            self.disruptor.logger.debug("Disconnected system '%s'.", system_name)
+
+    async def _disrupt_system(self, system_name: str, input_q: asyncio.Queue, output_q: asyncio.Queue):
+        while not self.disruptor.stop_event.is_set():
+            try:
+                raw_output = await asyncio.wait_for(input_q.get(), timeout=0.5)
+                disrupted_output = await self.disruptor.disrupt_output(raw_output)
+                await output_q.put(disrupted_output)
+                # adjust tension index a little based on result
+                if disrupted_output.stability_broken:
+                    self.disruptor.tension_index = min(1.0, self.disruptor.tension_index + 0.05)
+                else:
+                    self.disruptor.tension_index = max(0.0, self.disruptor.tension_index - 0.02)
+            except asyncio.TimeoutError:
+                await asyncio.sleep(0.01)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self.disruptor.logger.exception("Disruption failed for %s: %s", system_name, e)
+
+    async def disconnect_all(self):
+        names = list(self.connected_systems.keys())
+        for n in names:
+            await self.disconnect_system(n)
+
+# --------------------------
+# Example Usage
+# --------------------------
+
+async def demo_disruption_engine():
+    de = DisruptionEngine(rng_seed=42, sample_rate=20, initial_tension=0.3, logger_level=logging.INFO)
+    sd = SystemDisruptor(de)
+
+    stable_q = asyncio.Queue()
+    disrupted_q = asyncio.Queue()
+
+    # start engine generator
+    await de.start()
+    # connect system (task returned)
+    await sd.connect_system("StableSystem", stable_q, disrupted_q)
+
+    try:
+        # push some stable messages
+        await stable_q.put("The system has found its balance and flow.")
+        await stable_q.put("Everything is calm and in harmony.")
+        await stable_q.put("All processes are in a peaceful state.")
+        # read disrupted outputs
+        for _ in range(3):
+            d = await disrupted_q.get()
+            print("\n--- DisruptionOutput ---")
+            print("Content:", d.content if isinstance(d.content, str) else "waveform[...]")
+            print("Tension:", round(d.tension_index, 3), "State:", de.chaos_state().name)
+            print("Harmonics:", de.snapshot_harmonics())
+
+        # inject a perturbation externally
+        de.inject_perturbation(freq_shift=0.1, amp_shift=0.1)
+        await asyncio.sleep(1.0)
+    finally:
+        await sd.disconnect_all()
+        await de.stop()
+
+if __name__ == "__main__":
+    asyncio.run(demo_disruption_engine())
