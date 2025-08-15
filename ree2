@@ -1,0 +1,490 @@
+# heliosre/__init__.py
+__all__ = ["engine", "cli", "config", "exceptions"]
+__version__ = "0.2.0"
+
+class HeliosError(Exception):
+    """Base exception for all HeliosRE errors"""
+    pass
+
+class AnalysisError(HeliosError):
+    """Errors during analysis phases"""
+    pass
+
+class SandboxError(HeliosError):
+    """Sandbox-related failures"""
+    pass
+
+
+# heliosre/config.py
+import yaml
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, List, Optional
+
+@dataclass
+class AnalysisProfile:
+    timeout_sec: int = 30
+    max_memory_mb: int = 1024
+    enabled_plugins: List[str] = field(default_factory=lambda: ['standard'])
+
+@dataclass
+class MLConfig:
+    enabled: bool = True
+    model_path: Path = Path('./models')
+    features: Dict[str, bool] = field(default_factory=lambda: {
+        'opcode_histogram': True,
+        'string_entropy': True,
+        'cfg_metrics': True
+    })
+
+@dataclass
+class HeliosConfig:
+    workdir: Path
+    analysis: AnalysisProfile = field(default_factory=AnalysisProfile)
+    ml: MLConfig = field(default_factory=MLConfig)
+    collab_url: Optional[str] = None
+    plugins: Dict[str, dict] = field(default_factory=dict)
+
+    @classmethod
+    def from_yaml(cls, path: Path) -> 'HeliosConfig':
+        """Load configuration from YAML file"""
+        with open(path) as f:
+            data = yaml.safe_load(f)
+            return cls(
+                workdir=Path(data.get('workdir', './helios-out')),
+                analysis=AnalysisProfile(**data.get('analysis', {})),
+                ml=MLConfig(**data.get('ml', {})),
+                collab_url=data.get('collab_url'),
+                plugins=data.get('plugins', {})
+            )
+
+
+# heliosre/engine.py
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Optional, Dict, Any
+from .config import HeliosConfig
+from .plugins.registry import PluginManager
+from .arch.manager import ArchitectureManager
+from .il.pipeline import LiftingPipeline
+from .static.analyzer import StaticAnalyzer
+from .dynamic.manager import DynamicAnalysisManager
+from .symbolic.executor import SymbolicEngine
+from .fuzzing.manager import FuzzingManager
+from .ml.service import MLAnalysisService
+from .reporting.manager import ReportManager
+from .exceptions import AnalysisError
+from .utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+class ReverseEngineeringEngine:
+    """Core analysis engine with parallel execution capabilities"""
+    
+    def __init__(self, target: str, *, arch: Optional[str] = None, config: Optional[HeliosConfig] = None):
+        self.target = Path(target).absolute()
+        self.arch = arch
+        self.config = config or HeliosConfig(workdir=Path('./helios-out'))
+        self._setup_components()
+        self.results: Dict[str, Any] = {}
+        self._executor = ThreadPoolExecutor(max_workers=4)
+
+    def _setup_components(self):
+        """Initialize all subsystem managers"""
+        self.plugins = PluginManager(self.config)
+        self.arch_mgr = ArchitectureManager()
+        self.lifter = LiftingPipeline()
+        self.static = StaticAnalyzer(self.config)
+        self.dynamic = DynamicAnalysisManager(self.config)
+        self.symbolic = SymbolicEngine(self.config)
+        self.fuzzer = FuzzingManager(self.config)
+        self.ml = MLAnalysisService(self.config.ml)
+        self.reporter = ReportManager(self.config.workdir)
+
+    async def detect_architecture(self) -> str:
+        """Auto-detect target architecture with fallback"""
+        if self.arch:
+            return self.arch.lower()
+        
+        try:
+            detected = await self.arch_mgr.detect(self.target)
+            logger.info(f"Detected architecture: {detected}")
+            return detected
+        except AnalysisError as e:
+            logger.warning(f"Architecture detection failed: {e}")
+            return 'x86_64'  # Safe default
+
+    async def run_static_analysis(self) -> Dict:
+        """Run comprehensive static analysis"""
+        try:
+            arch = await self.detect_architecture()
+            self.results['metadata'] = {
+                'target': str(self.target),
+                'architecture': arch,
+                'size': self.target.stat().st_size
+            }
+
+            # Parallel lifting and analysis
+            il_task = asyncio.to_thread(
+                self.lifter.process, 
+                self.target, 
+                self.arch_mgr.get_handler(arch)
+            )
+            static_task = asyncio.to_thread(
+                self.static.analyze,
+                self.target,
+                arch
+            )
+            
+            il_module, static_results = await asyncio.gather(il_task, static_task)
+            
+            self.results.update({
+                'il': il_module,
+                'static': static_results,
+                'xrefs': self.static.build_xrefs(il_module)
+            })
+            return self.results['static']
+        except Exception as e:
+            raise AnalysisError(f"Static analysis failed: {str(e)}") from e
+
+    async def run_dynamic_analysis(self, inputs: Optional[List[bytes]] = None) -> Dict:
+        """Execute target with instrumentation"""
+        try:
+            dyn_results = await self.dynamic.analyze(
+                self.target,
+                self.results.get('il'),
+                inputs or []
+            )
+            self.results['dynamic'] = dyn_results
+            return dyn_results
+        except Exception as e:
+            raise AnalysisError(f"Dynamic analysis failed: {str(e)}") from e
+
+    async def run_hybrid_analysis(self) -> Dict:
+        """Combine static and dynamic findings"""
+        try:
+            if 'il' not in self.results:
+                await self.run_static_analysis()
+                
+            hybrid = {
+                'patched_il': self.dynamic.patch_il(
+                    self.results['il'],
+                    self.results.get('dynamic', {})
+                ),
+                'symbolic': await asyncio.to_thread(
+                    self.symbolic.explore,
+                    self.results['il']
+                )
+            }
+            self.results['hybrid'] = hybrid
+            return hybrid
+        except Exception as e:
+            raise AnalysisError(f"Hybrid analysis failed: {str(e)}") from e
+
+    async def run_full_analysis(self) -> Dict:
+        """Complete analysis pipeline with parallel execution"""
+        analysis_tasks = [
+            self.run_static_analysis(),
+            self.run_dynamic_analysis(),
+            self.run_hybrid_analysis()
+        ]
+        
+        if self.config.ml.enabled:
+            analysis_tasks.append(
+                asyncio.to_thread(
+                    self.ml.analyze,
+                    self.results
+                )
+            )
+        
+        await asyncio.gather(*analysis_tasks)
+        await self.reporter.generate(self.results)
+        return self.results
+
+
+# heliosre/il/pipeline.py
+from pathlib import Path
+from typing import Optional
+from dataclasses import dataclass
+from .ir import ILModule
+from .passes import (
+    ControlFlowRecoveryPass,
+    DataTypeInferencePass,
+    DeadCodeEliminationPass,
+    TaintAnalysisPass
+)
+from ..arch.base import ArchitectureHandler
+from ..utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+@dataclass
+class LiftingPipeline:
+    """Multi-stage intermediate representation processor"""
+    
+    passes: list = field(default_factory=lambda: [
+        ControlFlowRecoveryPass(),
+        DataTypeInferencePass(),
+        TaintAnalysisPass(),
+        DeadCodeEliminationPass()
+    ])
+    
+    def process(self, target: Path, arch_handler: ArchitectureHandler) -> ILModule:
+        """Full lifting pipeline from binary to analyzed IL"""
+        logger.info(f"Lifting {target.name} using {arch_handler.__class__.__name__}")
+        
+        # Stage 1: Architecture-specific disassembly
+        native_blocks = arch_handler.disassemble(target)
+        
+        # Stage 2: Initial IL construction
+        il_module = ILModule.from_native(native_blocks)
+        
+        # Stage 3: Analysis passes
+        for pass_ in self.passes:
+            logger.debug(f"Running pass: {pass_.__class__.__name__}")
+            il_module = pass_.run(il_module)
+            
+        return il_module
+
+
+# heliosre/static/analyzer.py
+from pathlib import Path
+from typing import Dict, Any
+from .signatures import FunctionSignatureDB
+from .decompiler import Decompiler
+from .xref import XRefAnalyzer
+from ..config import HeliosConfig
+from ..utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+class StaticAnalyzer:
+    """Comprehensive static analysis manager"""
+    
+    def __init__(self, config: HeliosConfig):
+        self.config = config
+        self.sig_db = FunctionSignatureDB()
+        self.decompiler = Decompiler(config)
+        self.xref = XRefAnalyzer()
+
+    def analyze(self, target: Path, arch: str) -> Dict[str, Any]:
+        """Run all static analysis phases"""
+        logger.info(f"Starting static analysis of {target.name}")
+        
+        results = {
+            'file_info': self._analyze_file_header(target),
+            'signatures': self.sig_db.match(target),
+            'strings': self._extract_strings(target),
+            'decompiled': self.decompiler.decompile(target, arch)
+        }
+        
+        return results
+
+    def build_xrefs(self, il_module) -> Dict[str, Any]:
+        """Generate cross-references from IL"""
+        return self.xref.analyze(il_module)
+
+    def _analyze_file_header(self, target: Path) -> Dict[str, Any]:
+        """Extract file format metadata"""
+        # Implementation would use lief or similar
+        return {'format': 'PE', 'sections': []}
+
+    def _extract_strings(self, target: Path) -> List[str]:
+        """Extract ASCII/Unicode strings"""
+        # Would use strings command or custom implementation
+        return ["sample string"]
+
+
+# heliosre/dynamic/manager.py
+import asyncio
+from pathlib import Path
+from typing import Dict, List, Any, Optional
+from ..config import HeliosConfig
+from ..exceptions import SandboxError
+from .sandbox import SecureSandbox
+from .tracer import DynamicTracer
+from .instrumentation import CoverageTracker
+from ..utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+class DynamicAnalysisManager:
+    """Orchestrates all dynamic analysis operations"""
+    
+    def __init__(self, config: HeliosConfig):
+        self.config = config
+        self.sandbox = SecureSandbox(config)
+        self.tracer = DynamicTracer()
+        self.coverage = CoverageTracker()
+
+    async def analyze(self, target: Path, il_module: Optional[Any] = None, inputs: List[bytes] = None) -> Dict[str, Any]:
+        """Execute target with instrumentation"""
+        logger.info(f"Starting dynamic analysis of {target.name}")
+        
+        if not inputs:
+            inputs = [b'test_input']  # Default test cases
+            
+        results = {
+            'traces': [],
+            'coverage': {},
+            'crash': None
+        }
+        
+        try:
+            async with self.sandbox:
+                for input_data in inputs:
+                    trace = await self.tracer.run(target, input_data)
+                    results['traces'].append(trace)
+                    
+                    if trace.get('crash'):
+                        results['crash'] = trace
+                        break
+                        
+                    self.coverage.update(trace)
+                
+                results['coverage'] = self.coverage.summary()
+                return results
+                
+        except Exception as e:
+            raise SandboxError(f"Dynamic analysis failed: {str(e)}") from e
+
+    def patch_il(self, il_module, dynamic_results) -> Any:
+        """Augment static IL with dynamic findings"""
+        # Implementation would merge traces into IL
+        return il_module
+
+
+# heliosre/symbolic/executor.py
+from typing import Dict, Any
+from ..config import HeliosConfig
+from ..il.ir import ILModule
+from ..utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+class SymbolicEngine:
+    """Advanced symbolic execution engine"""
+    
+    def __init__(self, config: HeliosConfig):
+        self.config = config
+        self._setup_solver()
+
+    def _setup_solver(self):
+        """Initialize symbolic execution backend"""
+        try:
+            from z3 import Solver, BitVec
+            self.solver = Solver()
+            self.BitVec = BitVec
+        except ImportError:
+            logger.warning("Z3 not available - symbolic features disabled")
+            self.solver = None
+
+    def explore(self, il_module: ILModule) -> Dict[str, Any]:
+        """Symbolically execute code paths"""
+        if not self.solver:
+            return {'error': 'Z3 solver not available'}
+            
+        logger.info("Starting symbolic execution")
+        
+        # Simplified symbolic execution
+        state = {}
+        for func in il_module.functions.values():
+            for block in func.blocks.values():
+                for instr in block.instructions:
+                    self._symbolic_exec(instr, state)
+        
+        return {
+            'state': str(self.solver.check()),
+            'constraints': len(self.solver.assertions())
+        }
+
+    def _symbolic_exec(self, instr, state):
+        """Process single instruction symbolically"""
+        # Actual implementation would handle various instruction types
+        pass
+
+
+# heliosre/reporting/manager.py
+import json
+from pathlib import Path
+from typing import Dict, Any
+from ..config import HeliosConfig
+from ..utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+class ReportManager:
+    """Handles all reporting and visualization generation"""
+    
+    def __init__(self, output_dir: Path):
+        self.output_dir = output_dir
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    async def generate(self, results: Dict[str, Any]) -> None:
+        """Generate all report artifacts"""
+        logger.info(f"Generating reports in {self.output_dir}")
+        
+        # JSON report
+        report_path = self.output_dir / 'analysis_report.json'
+        with open(report_path, 'w') as f:
+            json.dump(results, f, indent=2)
+        
+        # TODO: Add more report formats (HTML, SARIF, etc.)
+        logger.info(f"Analysis report saved to {report_path}")
+
+
+# heliosre/cli.py
+import argparse
+import asyncio
+from pathlib import Path
+from .engine import ReverseEngineeringEngine
+from .config import HeliosConfig, AnalysisProfile, MLConfig
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="HeliosRE - Advanced Program Analysis Platform",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    parser.add_argument("target", help="Target file to analyze")
+    parser.add_argument("-o", "--output", default="./helios-out",
+                       help="Output directory for reports")
+    parser.add_argument("--arch", help="Override architecture detection")
+    parser.add_argument("--timeout", type=int, default=30,
+                       help="Analysis timeout in seconds")
+    parser.add_argument("--no-ml", action="store_true",
+                       help="Disable machine learning analysis")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                       help="Enable verbose logging")
+    return parser.parse_args()
+
+def configure_logging(verbose: bool):
+    from .utils.logging import setup_logging
+    setup_logging(verbose=verbose)
+
+async def main():
+    args = parse_args()
+    configure_logging(args.verbose)
+    
+    config = HeliosConfig(
+        workdir=Path(args.output),
+        analysis=AnalysisProfile(timeout_sec=args.timeout),
+        ml=MLConfig(enabled=not args.no_ml)
+    )
+    
+    engine = ReverseEngineeringEngine(
+        target=args.target,
+        arch=args.arch,
+        config=config
+    )
+    
+    try:
+        results = await engine.run_full_analysis()
+        print(f"Analysis complete. Results saved to {args.output}")
+        return 0
+    except Exception as e:
+        print(f"Analysis failed: {str(e)}", file=sys.stderr)
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(asyncio.run(main()))
