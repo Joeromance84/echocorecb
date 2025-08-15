@@ -1,0 +1,283 @@
+import numpy as np
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+from sentence_transformers import SentenceTransformer
+from sklearn.neighbors import NearestNeighbors
+from typing import List, Dict, Tuple, Optional, Any
+import hashlib
+import json
+from pathlib import Path
+import asyncio
+import logging
+import random
+
+# Logger setup (your original code)
+logger = logging.getLogger("hybrid_synapse_engine")
+if not logger.hasHandlers():
+    handler = logging.StreamHandler()
+    fmt = logging.Formatter("[%(levelname)s] %(message)s")
+    handler.setFormatter(fmt)
+    logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+
+# --- Temporal RNN Predictor (your original code) ---
+class TemporalRNNPredictor:
+    def __init__(self, vocab_size=10, embedding_dim=64, rnn_units=128):
+        self.vocab_size = vocab_size
+        self.embedding_dim = embedding_dim
+        self.rnn_units = rnn_units
+        self.vocab_to_int: Dict[str, int] = {}
+        self.int_to_vocab: Dict[int, str] = {}
+        self.window_size = 5
+        self.model: Optional[keras.Model] = None
+        self.build_model()
+
+    def build_model(self):
+        self.model = keras.Sequential([
+            layers.Embedding(self.vocab_size, self.embedding_dim),
+            layers.LSTM(self.rnn_units),
+            layers.Dense(self.vocab_size, activation="softmax")
+        ])
+        self.model.compile(optimizer="adam", loss="categorical_crossentropy", metrics=["accuracy"])
+
+    def train(self, sequences: List[List[str]], epochs=50, batch_size=32):
+        vocab = sorted(set(file for seq in sequences for file in seq))
+        self.vocab_to_int = {file: i for i, file in enumerate(vocab)}
+        self.int_to_vocab = {i: file for i, file in enumerate(vocab)}
+        self.vocab_size = len(vocab)
+        self.build_model()
+
+        X, y = [], []
+        for seq in sequences:
+            for i in range(len(seq) - 1):
+                context = seq[:i+1]
+                target = seq[i+1]
+                if len(context) >= self.window_size:
+                    X.append([self.vocab_to_int[f] for f in context[-self.window_size:]])
+                    y.append(self.vocab_to_int[target])
+
+        if not X:
+            raise ValueError("Insufficient data for training.")
+
+        X = keras.preprocessing.sequence.pad_sequences(X, maxlen=self.window_size, padding="pre")
+        y = np.array(y)
+        y_onehot = keras.utils.to_categorical(y, num_classes=self.vocab_size)
+
+        logger.info("Training Temporal RNN Predictor...")
+        self.model.fit(X, y_onehot, epochs=epochs, batch_size=batch_size, verbose=0)
+        logger.info("Training complete.")
+
+    async def predict_next(self, history: List[str]) -> List[Tuple[str, float]]:
+        if not self.model or not self.vocab_to_int:
+            return []
+        indexed = [self.vocab_to_int.get(f, 0) for f in history]
+        indexed = indexed[-self.window_size:]
+        padded = keras.preprocessing.sequence.pad_sequences([indexed], maxlen=self.window_size, padding="pre")
+        preds = self.model.predict(padded, verbose=0)[0]
+        decoded = [(self.int_to_vocab[i], float(p)) for i, p in enumerate(preds)]
+        return sorted(decoded, key=lambda x: x[1], reverse=True)
+
+# --- Concept Bridge (your original code) ---
+class ConceptBridge:
+    def __init__(self, model_dir="models/concept"):
+        self.model = SentenceTransformer('all-mpnet-base-v2')
+        self.knn = NearestNeighbors(n_neighbors=5, metric="cosine")
+        self.file_embeddings: Dict[str, Any] = {}
+        self.concept_graph: Dict[str, set] = {}
+        self.model_dir = Path(model_dir)
+        self.model_dir.mkdir(parents=True, exist_ok=True)
+
+    async def add_document(self, file_path: str, content: str):
+        file_id = self._file_id(file_path)
+        embedding = self.model.encode(content)
+        concepts = self._extract_concepts(content)
+        self.file_embeddings[file_id] = {"path": file_path, "embedding": embedding, "concepts": concepts}
+        for c in concepts:
+            self.concept_graph.setdefault(c, set()).add(file_id)
+        self._update_index()
+        logger.info(f"Added document {file_path}")
+
+    def _file_id(self, path: str) -> str:
+        return hashlib.md5(path.encode()).hexdigest()[:16]
+
+    def _extract_concepts(self, text: str) -> List[str]:
+        words = text.lower().split()
+        return list({w for w in words if len(w) > 4 and w.isalpha()})[:5]
+
+    def _update_index(self):
+        if not self.file_embeddings:
+            return
+        embeddings = np.array([v["embedding"] for v in self.file_embeddings.values()])
+        self.knn.fit(embeddings)
+
+    async def find_matches(self, query: str, top_n=5) -> List[Tuple[str, float]]:
+        if not self.file_embeddings:
+            return []
+        query_emb = self.model.encode(query)
+        distances, indices = self.knn.kneighbors([query_emb], top_n)
+        keys = list(self.file_embeddings.keys())
+        return [(self.file_embeddings[keys[i]]["path"], float(1 - dist)) for dist, i in zip(distances[0], indices[0])]
+
+    async def save_state(self):
+        state = {
+            "file_embeddings": {k: {"path": v["path"], "embedding": v["embedding"].tolist(), "concepts": v["concepts"]}
+                                for k, v in self.file_embeddings.items()},
+            "concept_graph": {k: list(v) for k, v in self.concept_graph.items()}
+        }
+        with open(self.model_dir / "state.json", "w") as f:
+            json.dump(state, f)
+        logger.info("Concept Bridge state saved.")
+
+    async def load_state(self):
+        path = self.model_dir / "state.json"
+        if path.exists():
+            with open(path) as f:
+                state = json.load(f)
+            self.file_embeddings = {
+                k: {"path": v["path"], "embedding": np.array(v["embedding"]), "concepts": v["concepts"]}
+                for k, v in state["file_embeddings"].items()
+            }
+            self.concept_graph = {k: set(v) for k, v in state["concept_graph"].items()}
+            self._update_index()
+            logger.info("Concept Bridge state loaded.")
+
+
+# --- Meta-Learning Hybrid Predictor (NEW) ---
+class MetaHybridPredictor:
+    def __init__(self, temporal_predictor, concept_predictor):
+        self.temporal = temporal_predictor
+        self.concept = concept_predictor
+        self.file_list: List[str] = []
+        self.file_to_int: Dict[str, int] = {}
+        self.meta_model: Optional[keras.Model] = None
+
+    def _build_meta_model(self, num_files: int):
+        input_layer = layers.Input(shape=(num_files * 2,))
+        hidden = layers.Dense(128, activation='relu')(input_layer)
+        output = layers.Dense(num_files, activation='softmax')(hidden)
+        
+        self.meta_model = keras.Model(inputs=input_layer, outputs=output)
+        self.meta_model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+        logger.info("Meta-learning model built.")
+
+    async def train(self, training_data: List[Dict]):
+        """
+        Trains the meta-model on combined predictions and ground truth.
+        training_data format: [{'temporal_preds': [...], 'concept_preds': [...], 'ground_truth': 'file_path'}, ...]
+        """
+        self.file_list = sorted(list(set(d['ground_truth'] for d in training_data)))
+        self.file_to_int = {f: i for i, f in enumerate(self.file_list)}
+        num_files = len(self.file_list)
+        
+        self._build_meta_model(num_files)
+        
+        X, y = [], []
+        for data in training_data:
+            temporal_scores = {f: s for f, s in data['temporal_preds']}
+            concept_scores = {f: s for f, s in data['concept_preds']}
+            
+            features = []
+            for file in self.file_list:
+                features.append(temporal_scores.get(file, 0.0))
+                features.append(concept_scores.get(file, 0.0))
+            
+            X.append(features)
+            
+            ground_truth_int = self.file_to_int[data['ground_truth']]
+            y_onehot = np.zeros(num_files)
+            y_onehot[ground_truth_int] = 1.0
+            y.append(y_onehot)
+            
+        X = np.array(X)
+        y = np.array(y)
+        
+        logger.info(f"Training meta-model on {len(X)} examples...")
+        self.meta_model.fit(X, y, epochs=100, verbose=0)
+        logger.info("Meta-model training complete.")
+
+    async def predict_next(self, current_file: str, history: List[str]) -> List[Tuple[str, float]]:
+        if not self.meta_model:
+            return []
+            
+        temporal_preds_raw = {f: s for f, s in await self.temporal.predict_next(history)}
+        concept_preds_raw = {f: s for f, s in await self.concept.find_matches(current_file)}
+        
+        features = []
+        for file in self.file_list:
+            features.append(temporal_preds_raw.get(file, 0.0))
+            features.append(concept_preds_raw.get(file, 0.0))
+            
+        final_scores = self.meta_model.predict(np.array([features]), verbose=0)[0]
+        
+        predictions = [(self.file_list[i], float(score)) for i, score in enumerate(final_scores)]
+        return sorted(predictions, key=lambda x: x[1], reverse=True)
+
+# --- Demo routine with Meta-Learning ---
+async def demo():
+    logger.info("=== Meta-Learning Hybrid Engine Demo ===")
+    
+    # 1. Initialize components
+    concept_bridge = ConceptBridge()
+    temporal_predictor = TemporalRNNPredictor()
+    meta_hybrid_predictor = MetaHybridPredictor(temporal_predictor, concept_bridge)
+    
+    # 2. Simulate and train base models
+    documents = {
+        "project_a_notes.md": "Project A discussion on quantum entanglement.",
+        "project_a_code.py": "Python code for quantum simulations.",
+        "project_b_report.pdf": "Final report on deep learning for neural networks.",
+        "project_b_data.csv": "Dataset for training deep learning models."
+    }
+    
+    history_sequences = [
+        ["project_a_notes.md", "project_a_code.py"],
+        ["project_b_report.pdf", "project_b_data.csv"],
+        ["project_a_code.py", "project_b_report.pdf"],
+    ]
+    
+    for path, content in documents.items():
+        await concept_bridge.add_document(path, content)
+    temporal_predictor.train(history_sequences, epochs=100)
+    
+    # 3. Create meta-model training data
+    meta_train_data = []
+    logger.info("Generating training data for meta-model...")
+    for _ in range(50):
+        session = random.choice(history_sequences)
+        if len(session) > 1:
+            history = session[:-1]
+            current_file = history[-1]
+            ground_truth = session[-1]
+            
+            temporal_preds = await temporal_predictor.predict_next(history)
+            concept_preds = await concept_bridge.find_matches(current_file)
+            
+            meta_train_data.append({
+                "temporal_preds": temporal_preds,
+                "concept_preds": concept_preds,
+                "ground_truth": ground_truth
+            })
+            
+    # 4. Train the meta-model
+    await meta_hybrid_predictor.train(meta_train_data)
+    
+    # 5. Make a prediction with the new meta-model
+    logger.info("\nMaking a prediction with the meta-learning hybrid predictor...")
+    current_file_example = "project_a_notes.md"
+    history_example = ["project_a_code.py", "project_a_notes.md"]
+    
+    predictions = await meta_hybrid_predictor.predict_next(current_file_example, history_example)
+    
+    logger.info(f"Current file: '{current_file_example}'. History: {history_example}")
+    logger.info("Synapse suggests (via Meta-Learning):")
+    for path, score in predictions[:3]:
+        print(f"- {path} ({score:.2%})")
+
+    # 6. Save state
+    await concept_bridge.save_state()
+    logger.info("Demo finished. Final state saved.")
+
+if __name__ == "__main__":
+    asyncio.run(demo())
+
