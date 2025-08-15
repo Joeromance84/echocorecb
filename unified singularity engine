@@ -1,0 +1,290 @@
+import numpy as np
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+from sentence_transformers import SentenceTransformer
+from sklearn.neighbors import NearestNeighbors
+from typing import List, Dict, Tuple, Optional, Any
+import hashlib
+import time
+import json
+from pathlib import Path
+import asyncio
+import logging
+import random
+from datetime import datetime
+from collections import defaultdict
+
+# --- Logger Setup ---
+logger = logging.getLogger("enhanced_unified_agi_core")
+if not logger.hasHandlers():
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('[%(asctime)s][%(levelname)s] %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+
+# --- CORE ARCHITECTURES ---
+
+# 1. Quantum Cognition Core (Omega Engine & NexusBrain Global Workspace)
+class NexusBrain:
+    def __init__(self):
+        self.knowledge_graph = {}
+        self.observers = []
+    
+    async def integrate_perception(self, frame):
+        # Integration logic here
+        pass
+    
+    def register_observer(self, observer):
+        self.observers.append(observer)
+        
+    async def get_knowledge_graph(self):
+        return self.knowledge_graph
+    
+    async def integrate_new_knowledge(self, capabilities):
+        for cap in capabilities:
+            self.knowledge_graph[cap] = self.knowledge_graph.get(cap, {'count': 0})
+            self.knowledge_graph[cap]['count'] += 1
+            logger.info(f"NexusBrain: Integrated new capability '{cap}'.")
+
+class OmegaEngine:
+    def __init__(self):
+        self.memory: List[Dict] = []
+        self.harmony_score = 1.0
+        self.nexus_brain = NexusBrain()
+
+    async def perceive(self, raw_data: np.ndarray):
+        coords = np.random.uniform(-1, 1, 11)
+        entangle_id = hashlib.sha256(raw_data.tobytes() + str(time.time()).encode()).hexdigest()
+        frame = {'coords': coords, 'entangle_id': entangle_id}
+        self.memory.append(frame)
+        await self.nexus_brain.integrate_perception(frame)
+        logger.info(f"OmegaEngine: New frame perceived: {entangle_id[:8]}")
+        return frame
+
+    async def get_base_knowledge(self):
+        # Simulated knowledge base
+        return ["doc1.pdf", "doc2.md", "doc3.txt"]
+
+
+# 2. Modes of Thought (Temporal Predictor & Concept Bridge)
+
+class TemporalPredictor:
+    def __init__(self):
+        self.model: Optional[keras.Model] = None
+
+    async def sequence_evolution(self, content_graph: Dict) -> Dict:
+        # Implement temporal sequencing logic here
+        return {
+            'clusters': content_graph.get('clusters', []),
+            'cross_references': content_graph.get('cross_references', []),
+            'timelines': [{'order': ['doc1', 'doc2', 'doc3']}],
+            'new_capabilities': ['temporal_reasoning']
+        }
+
+class ConceptBridge:
+    def __init__(self):
+        self.model = SentenceTransformer('all-mpnet-base-v2')
+        self.file_embeddings = {}
+        self.graph = {}
+        self.knn = None
+
+    async def organize_research(self, documents: List[str]) -> Dict:
+        # Implement clustering and cross-reference detection here
+        return {
+            'clusters': [{'similarity': random.uniform(0.7,0.9), 'docs':['doc1','doc2']} for _ in range(5)],
+            'cross_references':[('doc1','doc3'), ('doc2','doc5')],
+            'documents':documents,
+            'timelines':[],
+            'new_capabilities': ['thematic_clustering', 'cross_referencing']
+        }
+        
+
+# 3. Self-Correction & Motivation (Feedback Loop & Core Governance)
+
+class FeedbackLoop:
+    def __init__(self, start_temporal=0.5, start_concept=0.5):
+        self.temporal_weight = start_temporal
+        self.concept_weight = start_concept
+        self.learning_rate = 0.05
+    
+    async def get_weights(self) -> Dict[str,float]:
+        return {'temporal': self.temporal_weight, 'concept': self.concept_weight}
+    
+    async def update_weights(self, source: str, reward: float):
+        if source == 'temporal':
+            self.temporal_weight += self.learning_rate * (reward - 0.5)
+            self.temporal_weight = max(0.1, min(1.0, self.temporal_weight))
+            self.concept_weight = 1.0 - self.temporal_weight
+        elif source == 'concept':
+            self.concept_weight += self.learning_rate * (reward - 0.5)
+            self.concept_weight = max(0.1, min(1.0, self.concept_weight))
+            self.temporal_weight = 1.0 - self.concept_weight
+
+class HybridPredictor:
+    def __init__(self, temporal_pred: TemporalPredictor, concept_bridge: ConceptBridge):
+        self.temporal = temporal_pred
+        self.concept = concept_bridge
+        self.weights = FeedbackLoop()
+        
+    async def provide_feedback(self, source: str, reward: float):
+        await self.weights.update_weights(source, reward)
+
+    async def predict(self, current_file: str, history: List[str]) -> List[Tuple[str, float]]:
+        weights = await self.weights.get_weights()
+        temporal_preds = await self.temporal.sequence_evolution({'clusters': [], 'cross_references': []})
+        concept_preds = await self.concept.organize_research(history)
+
+        combined = {}
+        for p, s in zip(concept_preds.get('documents', []), [random.uniform(0.1, 1.0)]*len(history)):
+            combined[p] = combined.get(p, 0.0) + s * weights['concept']
+        for p, s in zip(temporal_preds.get('clusters', []), [random.uniform(0.1, 1.0)]*len(temporal_preds.get('clusters', []))):
+            for doc in p.get('docs', []):
+                combined[doc] = combined.get(doc, 0.0) + s * weights['temporal']
+                
+        total = sum(combined.values())
+        if total > 0:
+            combined = {k: v/total for k, v in combined.items()}
+        return sorted(combined.items(), key=lambda x: x[1], reverse=True)
+
+# Mission classes
+
+class Mission:
+    def __init__(self, name: str):
+        self.name = name
+    async def evaluate(self, output: Dict) -> float:
+        return random.uniform(0.6, 1.0)
+
+class EnhancedMission(Mission):
+    def __init__(self, name, growth_targets=None):
+        super().__init__(name)
+        self.growth_targets = growth_targets or []
+        
+    async def evaluate(self, output):
+        base_score = await super().evaluate(output)
+        
+        growth_score = sum(
+            1 for target in self.growth_targets 
+            if target in output.get('new_capabilities', [])
+        ) / max(1, len(self.growth_targets))
+        
+        return (base_score * 0.7) + (growth_score * 0.3)
+
+class CoreGovernance:
+    def __init__(self, agi):
+        self.agi = agi
+        self.reward_history = []
+        
+    async def run(self, mission: Mission) -> Dict:
+        output_1 = await self.agi.concept.organize_research(['doc1.pdf', 'doc2.md'])
+        reward_1 = await mission.evaluate(output_1)
+        await self.agi.hybrid_predictor.provide_feedback('concept', reward_1)
+
+        output_2 = await self.agi.temporal.sequence_evolution(output_1)
+        reward_2 = await mission.evaluate(output_2)
+        await self.agi.hybrid_predictor.provide_feedback('temporal', reward_2)
+
+        final_score = (reward_1 + reward_2) / 2
+        self.reward_history.append(final_score)
+
+        return {
+            'concept_reward': reward_1,
+            'temporal_reward': reward_2,
+            'final_score': final_score
+        }
+
+# --- Exponential Growth Flywheel & Systems ---
+
+class CapabilityMatrix:
+    def __init__(self):
+        self.matrix = {}
+        
+    def add_capability(self, name: str, growth_factor=1.0):
+        self.matrix[name] = {'growth_factor': growth_factor}
+    
+    def recommend_next_goals(self):
+        return sorted(self.matrix.keys(), key=lambda k: self.matrix[k]['growth_factor'], reverse=True)[:3]
+
+class GrowthMetrics:
+    def __init__(self):
+        self.metrics = defaultdict(float)
+
+    def update_from_report(self, report: Dict):
+        for k, v in report.items():
+            self.metrics[k] += v if isinstance(v, float) else 0
+
+class EnhancedGrowthFlywheel:
+    def __init__(self, capability_matrix: CapabilityMatrix, metrics_tracker: GrowthMetrics):
+        self.cycle_count = 0
+        self.capability_matrix = capability_matrix
+        self.metrics = metrics_tracker
+
+    async def run_cycle(self, mission_report=None) -> Dict:
+        self.cycle_count += 1
+        logger.info(f"Growth Flywheel: Starting cycle {self.cycle_count}")
+
+        new_capability = f"cap_{self.cycle_count}"
+        self.capability_matrix.add_capability(new_capability)
+
+        knowledge = {
+            'new_capabilities': [new_capability],
+            'performance_delta': random.uniform(0.1, 0.5),
+        }
+
+        self.metrics.update_from_report(knowledge)
+
+        return knowledge
+
+# --- Unified AGI Core ---
+
+class AGICore:
+    def __init__(self):
+        # Core cognitive engines
+        self.omega_engine = OmegaEngine()
+        self.nexus_brain = self.omega_engine.nexus_brain
+        
+        self.temporal = TemporalPredictor()
+        self.concept = ConceptBridge()
+        self.hybrid_predictor = HybridPredictor(self.temporal, self.concept)
+        
+        # Control and learning
+        self.core_governance = CoreGovernance(self)
+        
+        # Growth systems
+        self.capability_matrix = CapabilityMatrix()
+        self.growth_metrics = GrowthMetrics()
+        self.growth_flywheel = EnhancedGrowthFlywheel(self.capability_matrix, self.growth_metrics)
+        
+        # Singularity Engine stub for later extension
+        self.singularity_engine = None
+    
+    async def feedback(self, source: str, reward: float):
+        await self.hybrid_predictor.provide_feedback(source, reward)
+
+# --- Demo Main ---
+
+async def main():
+    agi = AGICore()
+
+    # Perceive data
+    perception = await agi.omega_engine.perceive(np.random.rand(256))
+    logger.info(f"First perception frame: {perception}")
+
+    # Define mission
+    mission = EnhancedMission(name="Research Reorganization", growth_targets=['thematic_clustering', 'temporal_reasoning'])
+
+    # Execute mission under governance
+    results = await agi.core_governance.run(mission)
+    logger.info(f"Mission results: {results}")
+
+    # Run a growth cycle informed by mission success
+    growth_report = await agi.growth_flywheel.run_cycle(results)
+    logger.info(f"Growth cycle report: {growth_report}")
+
+    # Report current capabilities and metrics
+    logger.info(f"Capabilities: {agi.capability_matrix.matrix}")
+    logger.info(f"Growth metrics: {dict(agi.growth_metrics.metrics)}")
+
+if __name__ == '__main__':
+    asyncio.run(main())
