@@ -1,0 +1,575 @@
+# heliosre/__init__.py
+__all__ = ["engine", "cli", "config", "exceptions"]
+__version__ = "0.2.0"
+
+class HeliosError(Exception):
+    """Base exception for all HeliosRE errors"""
+    pass
+
+class AnalysisError(HeliosError):
+    """Errors during analysis phases"""
+    pass
+
+class SandboxError(HeliosError):
+    """Sandbox-related failures"""
+    pass
+
+
+# heliosre/config.py
+import yaml
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, List, Optional
+
+@dataclass
+class AnalysisProfile:
+    timeout_sec: int = 30
+    max_memory_mb: int = 1024
+    enabled_plugins: List[str] = field(default_factory=lambda: ['standard'])
+
+@dataclass
+class MLConfig:
+    enabled: bool = True
+    model_path: Path = Path('./models')
+    features: Dict[str, bool] = field(default_factory=lambda: {
+        'opcode_histogram': True,
+        'string_entropy': True,
+        'cfg_metrics': True
+    })
+
+@dataclass
+class HeliosConfig:
+    workdir: Path
+    analysis: AnalysisProfile = field(default_factory=AnalysisProfile)
+    ml: MLConfig = field(default_factory=MLConfig)
+    collab_url: Optional[str] = None
+    plugins: Dict[str, dict] = field(default_factory=dict)
+
+    @classmethod
+    def from_yaml(cls, path: Path) -> 'HeliosConfig':
+        """Load configuration from YAML file"""
+        with open(path) as f:
+            data = yaml.safe_load(f)
+            return cls(
+                workdir=Path(data.get('workdir', './helios-out')),
+                analysis=AnalysisProfile(**data.get('analysis', {})),
+                ml=MLConfig(**data.get('ml', {})),
+                collab_url=data.get('collab_url'),
+                plugins=data.get('plugins', {})
+            )
+
+
+# heliosre/utils/logging.py
+import logging
+
+def get_logger(name="helios"):
+    logger = logging.getLogger(name)
+    if not logger.hasHandlers():
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter("[%(levelname)s] %(message)s")
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+    return logger
+
+def setup_logging(verbose=False):
+    logger = get_logger()
+    if verbose:
+        logger.setLevel(logging.DEBUG)
+    else:
+        logger.setLevel(logging.INFO)
+
+
+# heliosre/engine.py
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Optional, Dict, Any, List
+from .config import HeliosConfig
+from .plugins.registry import PluginRegistry
+from .arch.base import ArchitectureHandler
+from .il.pipeline import LiftingPipeline
+from .static.analyzer import StaticAnalyzer
+from .dynamic.manager import DynamicAnalysisManager
+from .symbolic.executor import SymbolicEngine
+from .fuzzing.manager import FuzzingManager
+from .ml.service import MLAnalysisService
+from .reporting.manager import ReportManager
+from .exceptions import AnalysisError
+from .utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+class ReverseEngineeringEngine:
+    """Core analysis engine with parallel execution capabilities"""
+    
+    def __init__(self, target: str, *, arch: Optional[str] = None, config: Optional[HeliosConfig] = None):
+        self.target = Path(target).absolute()
+        self.arch = arch
+        self.config = config or HeliosConfig(workdir=Path('./helios-out'))
+        self._setup_components()
+        self.results: Dict[str, Any] = {}
+        self._executor = ThreadPoolExecutor(max_workers=4)
+
+    def _setup_components(self):
+        """Initialize all subsystem managers"""
+        self.plugins = PluginRegistry()
+        self.arch_mgr = ArchitectureHandler()
+        self.lifter = LiftingPipeline()
+        self.static = StaticAnalyzer(self.config)
+        self.dynamic = DynamicAnalysisManager(self.config)
+        self.symbolic = SymbolicEngine(self.config)
+        self.fuzzer = FuzzingManager(self.config)
+        self.ml = MLAnalysisService(self.config.ml)
+        self.reporter = ReportManager(self.config.workdir)
+
+    async def detect_architecture(self) -> str:
+        """Auto-detect target architecture with fallback"""
+        if self.arch:
+            return self.arch.lower()
+        
+        try:
+            detected = await self.arch_mgr.detect(self.target)
+            logger.info(f"Detected architecture: {detected}")
+            return detected
+        except AnalysisError as e:
+            logger.warning(f"Architecture detection failed: {e}")
+            return 'x86_64'  # Safe default
+
+    async def run_static_analysis(self) -> Dict[str, Any]:
+        """Run comprehensive static analysis"""
+        try:
+            arch = await self.detect_architecture()
+            self.results['metadata'] = {
+                'target': str(self.target),
+                'architecture': arch,
+                'size': self.target.stat().st_size
+            }
+
+            # Parallel lifting and analysis
+            il_task = asyncio.to_thread(
+                self.lifter.process, 
+                self.target, 
+                self.arch_mgr.get_disassembler(arch)
+            )
+            static_task = asyncio.to_thread(
+                self.static.analyze,
+                self.target,
+                arch
+            )
+            
+            il_module, static_results = await asyncio.gather(il_task, static_task)
+            
+            self.results.update({
+                'il': il_module,
+                'static': static_results,
+                'xrefs': self.static.build_xrefs(il_module)
+            })
+            return self.results['static']
+        except Exception as e:
+            raise AnalysisError(f"Static analysis failed: {str(e)}") from e
+
+    async def run_dynamic_analysis(self, inputs: Optional[List[bytes]] = None) -> Dict[str, Any]:
+        """Execute target with instrumentation"""
+        try:
+            dyn_results = await self.dynamic.analyze(
+                self.target,
+                self.results.get('il'),
+                inputs or []
+            )
+            self.results['dynamic'] = dyn_results
+            return dyn_results
+        except Exception as e:
+            raise AnalysisError(f"Dynamic analysis failed: {str(e)}") from e
+
+    async def run_hybrid_analysis(self) -> Dict[str, Any]:
+        """Combine static and dynamic findings"""
+        try:
+            if 'il' not in self.results:
+                await self.run_static_analysis()
+                
+            hybrid = {
+                'patched_il': self.dynamic.patch_il(
+                    self.results['il'],
+                    self.results.get('dynamic', {})
+                ),
+                'symbolic': await asyncio.to_thread(
+                    self.symbolic.explore,
+                    self.results['il']
+                )
+            }
+            self.results['hybrid'] = hybrid
+            return hybrid
+        except Exception as e:
+            raise AnalysisError(f"Hybrid analysis failed: {str(e)}") from e
+
+    async def run_full_analysis(self) -> Dict[str, Any]:
+        """Complete analysis pipeline with parallel execution"""
+        analysis_tasks = [
+            self.run_static_analysis(),
+            self.run_dynamic_analysis(),
+            self.run_hybrid_analysis()
+        ]
+        
+        if self.config.ml.enabled:
+            analysis_tasks.append(
+                asyncio.to_thread(
+                    self.ml.analyze,
+                    self.results
+                )
+            )
+        
+        await asyncio.gather(*analysis_tasks)
+        await self.reporter.generate(self.results)
+        return self.results
+
+
+# heliosre/il/ir.py
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
+
+@dataclass
+class ILOperand:
+    type: str  # e.g., 'reg', 'imm', 'mem'
+    value: Any
+
+@dataclass
+class ILInstr:
+    op: str  # e.g., 'ADD', 'MOV', 'JMP'
+    operands: List[ILOperand] = field(default_factory=list)
+    addr: Optional[int] = None
+    tags: Dict[str, Any] = field(default_factory=dict) # Taint, side-channel info
+
+@dataclass
+class ILBlock:
+    addr: int
+    instructions: List[ILInstr] = field(default_factory=list)
+    predecessors: List[int] = field(default_factory=list)
+    successors: List[int] = field(default_factory=list)
+
+@dataclass
+class ILFunction:
+    name: str
+    blocks: Dict[int, ILBlock] = field(default_factory=dict)
+    entry_addr: Optional[int] = None
+
+@dataclass
+class ILModule:
+    functions: Dict[str, ILFunction] = field(default_factory=dict)
+    entry_point: Optional[str] = None
+    
+    @classmethod
+    def from_native(cls, native_blocks):
+        # Placeholder for translating native blocks to ILModule
+        mod = cls()
+        # Populate mod.functions from native_blocks
+        return mod
+
+    def to_dict(self):
+        # Helper for serialization/reporting
+        return {
+            'functions': {
+                name: {'entry_addr': fn.entry_addr, 'blocks': len(fn.blocks)} 
+                for name, fn in self.functions.items()
+            },
+            'entry_point': self.entry_point
+        }
+
+
+# heliosre/il/pipeline.py
+from pathlib import Path
+from dataclasses import dataclass, field
+from .ir import ILModule
+from .passes import (
+    ControlFlowRecoveryPass,
+    DataTypeInferencePass,
+    DeadCodeEliminationPass
+)
+from ..utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+@dataclass
+class LiftingPipeline:
+    """Multi-stage intermediate representation processor"""
+    passes: list = field(default_factory=lambda: [
+        ControlFlowRecoveryPass(),
+        DataTypeInferencePass(),
+        DeadCodeEliminationPass()
+    ])
+    
+    def process(self, target: Path, arch_handler) -> ILModule:
+        logger.info(f"Lifting {target.name} using {arch_handler.__class__.__name__}")
+        native_blocks = arch_handler.disassemble(target)
+        il_module = ILModule.from_native(native_blocks)
+        for p in self.passes:
+            logger.debug(f"Running pass: {p.__class__.__name__}")
+            il_module = p.run(il_module)
+        return il_module
+
+
+# heliosre/static/analyzer.py
+from pathlib import Path
+from typing import Dict, Any, List
+from ..utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+class StaticAnalyzer:
+    """Comprehensive static analysis manager"""
+    
+    def __init__(self, config):
+        self.config = config
+
+    def analyze(self, target: Path, arch: str) -> Dict[str, Any]:
+        logger.info(f"Starting static analysis of {target.name}")
+        # Placeholder: real methods to analyze file, extract signatures, decompile, etc.
+        return {
+            'file_info': {'format': 'unknown', 'size': target.stat().st_size},
+            'signatures': [],
+            'strings': ["example string"],
+            'decompiled': "// pseudocode placeholder"
+        }
+
+    def build_xrefs(self, il_module) -> Dict[str, Any]:
+        # Placeholder cross-reference generation
+        return {"calls": [], "refs": []}
+
+
+# heliosre/dynamic/manager.py
+import asyncio
+from pathlib import Path
+from typing import Optional, List, Dict, Any
+from ..utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+class DynamicAnalysisManager:
+    """Orchestrates all dynamic analysis operations"""
+    def __init__(self, config):
+        self.config = config
+        self.coverage = set()
+
+    async def analyze(self, target: Path, il_module: Optional[Any] = None, inputs: Optional[List[bytes]] = None) -> Dict[str, Any]:
+        logger.info(f"Starting dynamic analysis on {target.name}")
+        # Placeholder for sandbox and tracer integration
+        return {'traces': [], 'coverage': {}, 'crash': None}
+
+    def patch_il(self, il_module, dynamic_results) -> Any:
+        # Merge dynamic info into IL, placeholder
+        return il_module
+
+
+# heliosre/symbolic/executor.py
+from typing import Dict, Any
+from ..utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+class SymbolicEngine:
+    """Symbolic execution engine placeholder"""
+    def __init__(self, config):
+        self.config = config
+        try:
+            from z3 import Solver, BitVec
+            self.solver = Solver()
+            self.BitVec = BitVec
+        except ImportError:
+            logger.warning("Z3 not found, disabling symbolic execution.")
+            self.solver = None
+
+    def explore(self, il_module) -> Dict[str, Any]:
+        if not self.solver:
+            return {'error': 'Z3 solver not available'}
+        logger.info("Starting symbolic execution")
+        # Simplified placeholder logic
+        return {'status': str(self.solver.check()), 'constraints': len(self.solver.assertions())}
+
+
+# heliosre/fuzzing/manager.py
+from pathlib import Path
+from typing import Optional, List, Dict
+from ..utils.logging import get_logger
+import random
+
+logger = get_logger(__name__)
+
+class FuzzingManager:
+    def __init__(self, config):
+        self.config = config
+        self.corpus = []
+        self.coverage = set()
+
+    def mutate(self, data: bytes) -> bytes:
+        if not data:
+            return b'A'
+        mutated = bytearray(data)
+        for _ in range(random.randint(1, 10)):
+            idx = random.randint(0, len(mutated) - 1)
+            mutated[idx] = random.randint(0, 255)
+        return bytes(mutated)
+
+    def fuzz(self, seeds: Optional[List[bytes]] = None) -> Dict[str, Any]:
+        if seeds:
+            self.corpus.extend(seeds)
+        crashes = []
+        for _ in range(100):
+            input_data = self.mutate(random.choice(self.corpus) if self.corpus else b'')
+            # Placeholder for execution and coverage check
+            # No real sandboxed execution in this stub
+            if random.random() < 0.01:  # Random artificial crash
+                crashes.append({'input': input_data.hex(), 'trace': {}})
+
+        return {'total_crashes': len(crashes), 'crashes': crashes}
+
+
+# heliosre/ml/service.py
+from typing import Dict, Any
+from ..utils.logging import get_logger
+import random
+
+logger = get_logger(__name__)
+
+class MLAnalysisService:
+    def __init__(self, config):
+        self.enabled = config.enabled
+        self.models = {
+            'malware_detector': None,
+            'compiler_fingerprint': None
+        }
+
+    def extract(self, reports: Dict[str, Any]) -> Dict[str, Any]:
+        logger.info("Extracting ML features...")
+        # Placeholder feature extractor
+        return {'opcode_n_grams': [1, 2, 3], 'string_entropy': random.random()}
+
+    def predict_all(self, features: Dict[str, Any]) -> Dict[str, Any]:
+        if not self.enabled:
+            return {}
+        logger.info("Running ML predictions...")
+        return {name: random.random() for name in self.models.keys()}
+
+
+# heliosre/reporting/manager.py
+import json
+from pathlib import Path
+from typing import Dict, Any
+from ..utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+class ReportManager:
+    def __init__(self, output_dir: Path):
+        self.output_dir = output_dir
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    async def generate(self, results: Dict[str, Any]) -> None:
+        logger.info(f"Generating reports in {self.output_dir}")
+        path = self.output_dir / "report.json"
+        with open(path, 'w') as f:
+            json.dump(results, f, indent=2)
+        logger.info(f"Report saved to {path}")
+
+
+# heliosre/plugins/registry.py
+class PluginRegistry:
+    def __init__(self):
+        self._plugins = {}
+
+    def load(self, module):
+        for name in getattr(module, "PLUGINS", []):
+            self._plugins[name.__name__] = name
+
+    def get(self, name):
+        return self._plugins.get(name)
+
+
+# heliosre/arch/base.py
+class UniversalDisassembler:
+    def disassemble(self, target_path):
+        # Fallback: return empty list
+        return []
+
+class ArchitectureHandler:
+    ARCHITECTURES = {}
+
+    @classmethod
+    def register_arch(cls, name: str, handler_class):
+        cls.ARCHITECTURES[name] = handler_class
+
+    @classmethod
+    def get_disassembler(cls, arch: str):
+        return cls.ARCHITECTURES.get(arch, UniversalDisassembler)()
+
+
+# heliosre/arch/pybytecode.py
+class PyBytecodeAnalyzer:
+    def disassemble(self, path):
+        import marshal
+        with open(path, "rb") as f:
+            f.seek(16)
+            return marshal.load(f)
+
+from .base import ArchitectureHandler
+ArchitectureHandler.register_arch("pybytecode", PyBytecodeAnalyzer())
+
+
+# heliosre/dynamic/tracer.py
+class DynamicTracer:
+    async def run(self, target_path, input_data):
+        # Placeholder async tracer run
+        return {'status': 'ok', 'events': [{'block_id': 1}, {'block_id': 2}]}
+
+
+# heliosre/cli.py
+import argparse
+import asyncio
+import sys
+from pathlib import Path
+from .engine import ReverseEngineeringEngine
+from .config import HeliosConfig, AnalysisProfile, MLConfig
+from .utils.logging import setup_logging
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="HeliosRE - Advanced Program Analysis Platform",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    parser.add_argument("target", help="Target file to analyze")
+    parser.add_argument("-o", "--output", default="./helios-out",
+                       help="Output directory for reports")
+    parser.add_argument("--arch", help="Override architecture detection")
+    parser.add_argument("--timeout", type=int, default=30,
+                       help="Analysis timeout in seconds")
+    parser.add_argument("--no-ml", action="store_true",
+                       help="Disable machine learning analysis")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                       help="Enable verbose logging")
+    return parser.parse_args()
+
+async def main():
+    args = parse_args()
+    setup_logging(args.verbose)
+    
+    config = HeliosConfig(
+        workdir=Path(args.output),
+        analysis=AnalysisProfile(timeout_sec=args.timeout),
+        ml=MLConfig(enabled=not args.no_ml)
+    )
+    
+    engine = ReverseEngineeringEngine(
+        target=args.target,
+        arch=args.arch,
+        config=config
+    )
+    
+    try:
+        results = await engine.run_full_analysis()
+        print(f"Analysis complete. Results saved to {args.output}")
+        return 0
+    except Exception as e:
+        print(f"Analysis failed: {str(e)}", file=sys.stderr)
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(asyncio.run(main()))
