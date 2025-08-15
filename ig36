@@ -1,0 +1,126 @@
+import networkx as nx
+import asyncio
+from typing import Dict, List, Any, Optional
+from concurrent.futures import ThreadPoolExecutor
+from transformers import AutoModel, AutoTokenizer
+import torch
+import docker  # For dynamic analysis
+from tree_sitter import Parser, Language  # For AST parsing
+
+# ----------------------------
+# 1. Extended Static Analyzer
+# ----------------------------
+class StaticAnalyzer:
+    def __init__(self):
+        self.parser = Parser()
+        self.parser.set_language(Language('build/tree-sitter-python.so', 'python'))
+
+    def extract_ast(self, code: str) -> Dict[str, Any]:
+        tree = self.parser.parse(bytes(code, "utf-8"))
+        # Convert AST to a graph-friendly format (simplified)
+        return {"ast": tree.root_node.sexp()}
+
+# ----------------------------
+# 2. Dynamic Analyzer (Sandboxed Execution)
+# ----------------------------
+class DynamicAnalyzer:
+    def __init__(self):
+        self.client = docker.from_env()
+
+    async def run_in_sandbox(self, code: str) -> Dict[str, Any]:
+        container = self.client.containers.run(
+            "python:latest",
+            f"python -c '{code}'",
+            detach=True,
+            remove=True
+        )
+        logs = container.logs().decode()
+        return {"output": logs, "errors": "None"}  # Simplified
+
+# ----------------------------
+# 3. Upgraded Semantic Analyzer
+# ----------------------------
+class SemanticAnalyzer:
+    def __init__(self, model_name: str = "microsoft/codebert-base"):
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = AutoModel.from_pretrained(model_name)
+        self.static_analyzer = StaticAnalyzer()
+        self.dynamic_analyzer = DynamicAnalyzer()
+
+    async def analyze_component(self, code: str) -> Dict[str, Any]:
+        # Parallel analysis
+        static = await asyncio.to_thread(self.static_analyzer.extract_ast, code)
+        dynamic = await self.dynamic_analyzer.run_in_sandbox(code)
+        embedding = await self.embed_code(code)
+        
+        return {
+            "static": static,
+            "dynamic": dynamic,
+            "embedding": embedding,
+            "classification": await self.classify_component(code)
+        }
+
+    # ... (keep existing embed_code/classify_component methods)
+
+# ----------------------------
+# 4. Knowledge Graph with Vector DB
+# ----------------------------
+class KnowledgeGraph:
+    def __init__(self):
+        self.graph = nx.DiGraph()
+        self.vector_db = {}  # Replace with FAISS/Weaviate in production
+
+    async def merge_external_graph(self, ext_graph: nx.DiGraph, analyzer: SemanticAnalyzer):
+        for node, attrs in ext_graph.nodes(data=True):
+            code = attrs.get("code")
+            if code:
+                analysis = await analyzer.analyze_component(code)
+                attrs["analysis"] = analysis
+                self.vector_db[node] = analysis["embedding"]  # Store embedding
+            self.graph.add_node(node, **attrs)
+
+# ----------------------------
+# 5. Self-Modification Interface
+# ----------------------------
+class AGIInterface:
+    def __init__(self, kg: KnowledgeGraph):
+        self.kg = kg
+
+    async def integrate_component(self, node: str):
+        attrs = self.kg.graph.nodes[node]
+        if attrs["integration_decision"] == "integrate":
+            # Generate safe wrapper code
+            new_code = f"# Integrated from {node}\n{attrs.get('code')}"
+            # Validate via formal methods (placeholder)
+            if self._validate_code(new_code):
+                self._update_agi_codebase(new_code)
+
+    def _validate_code(self, code: str) -> bool:
+        # Use Z3/Symbex for real validation
+        return "dangerous" not in code.lower()
+
+    def _update_agi_codebase(self, code: str):
+        logger.info(f"AGI codebase updated with:\n{code}")
+
+# ----------------------------
+# 6. Updated Entry Point
+# ----------------------------
+async def main():
+    external_sys = ExternalSystem(
+        name="ExternalSys1",
+        components=[
+            {"name": "AuthService", "type": "service", "code": "def auth(user): return True"},
+            {"name": "CacheDB", "type": "database", "code": "class Cache: pass"}
+        ]
+    )
+
+    ext_graph = map_system_to_graph(external_sys)
+    kg = KnowledgeGraph()
+    analyzer = SemanticAnalyzer()
+    agi = AGIInterface(kg)
+
+    await kg.merge_external_graph(ext_graph, analyzer)
+    await agi.integrate_component("AuthService")
+
+if __name__ == "__main__":
+    asyncio.run(main())
