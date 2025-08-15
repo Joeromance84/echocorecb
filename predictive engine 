@@ -1,0 +1,201 @@
+import numpy as np
+from sentence_transformers import SentenceTransformer
+from sklearn.neighbors import NearestNeighbors
+from typing import List, Dict, Tuple
+import hashlib
+import json
+from pathlib import Path
+import asyncio
+
+# --------------------------
+# Core Architecture
+# --------------------------
+
+class ConceptBridge:
+    def __init__(self, model_dir: str = "models/concept"):
+        self.model = SentenceTransformer('all-mpnet-base-v2')
+        self.knn = NearestNeighbors(n_neighbors=5, metric='cosine')
+        self.file_embeddings = {}
+        self.concept_graph = {}
+        self.model_dir = Path(model_dir)
+        self.model_dir.mkdir(parents=True, exist_ok=True)
+
+    async def add_document(self, file_path: str, content: str):
+        """Process and index a document's semantic content"""
+        file_id = self._file_to_id(file_path)
+        
+        # Generate embeddings
+        embedding = self.model.encode(content)
+        self.file_embeddings[file_id] = {
+            'path': file_path,
+            'embedding': embedding,
+            'concepts': self._extract_concepts(content)
+        }
+        
+        # Update concept graph
+        for concept in self.file_embeddings[file_id]['concepts']:
+            if concept not in self.concept_graph:
+                self.concept_graph[concept] = set()
+            self.concept_graph[concept].add(file_id)
+        
+        # Rebuild nearest neighbors index
+        self._update_index()
+
+    def _extract_concepts(self, text: str) -> List[str]:
+        """Extract key concepts using NLP (simplified)"""
+        # In production, use proper NLP pipeline
+        words = text.lower().split()
+        return list(set(w for w in words if len(w) > 4 and w.isalpha()))[:5]
+
+    async def find_semantic_matches(self, query: str, n: int = 3) -> List[Tuple[str, float]]:
+        """Find conceptually related files"""
+        query_embedding = self.model.encode(query)
+        
+        if not self.file_embeddings:
+            return []
+            
+        # Get nearest neighbors
+        embeddings = np.array([v['embedding'] for v in self.file_embeddings.values()])
+        self.knn.fit(embeddings)
+        
+        distances, indices = self.knn.kneighbors([query_embedding], n_neighbors=n)
+        
+        # Return sorted results
+        files = list(self.file_embeddings.keys())
+        return [
+            (self.file_embeddings[files[i]]['path'], float(1 - distances[0][j]))
+            for j, i in enumerate(indices[0])
+        ]
+
+    async def get_concept_flow(self, concept: str) -> List[str]:
+        """Get files connected through a concept"""
+        return list(self.concept_graph.get(concept, set()))
+
+    async def save_state(self):
+        """Persist model state"""
+        state = {
+            'file_embeddings': {
+                k: {
+                    'path': v['path'],
+                    'embedding': v['embedding'].tolist(),
+                    'concepts': v['concepts']
+                }
+                for k, v in self.file_embeddings.items()
+            },
+            'concept_graph': {
+                k: list(v) for k, v in self.concept_graph.items()
+            }
+        }
+        
+        with open(self.model_dir / "state.json", "w") as f:
+            json.dump(state, f)
+
+    async def load_state(self):
+        """Load saved state"""
+        state_path = self.model_dir / "state.json"
+        if state_path.exists():
+            with open(state_path) as f:
+                state = json.load(f)
+                self.file_embeddings = {
+                    k: {
+                        'path': v['path'],
+                        'embedding': np.array(v['embedding']),
+                        'concepts': v['concepts']
+                    }
+                    for k, v in state['file_embeddings'].items()
+                }
+                self.concept_graph = {
+                    k: set(v) for k, v in state['concept_graph'].items()
+                }
+            self._update_index()
+
+    def _update_index(self):
+        """Rebuild nearest neighbors index"""
+        if self.file_embeddings:
+            embeddings = np.array([v['embedding'] for v in self.file_embeddings.values()])
+            self.knn.fit(embeddings)
+
+    def _file_to_id(self, path: str) -> str:
+        """Generate consistent file ID"""
+        return hashlib.md5(path.encode()).hexdigest()[:16]
+
+# --------------------------
+# Hybrid Predictor
+# --------------------------
+
+class HybridPredictor:
+    def __init__(self, temporal_predictor, concept_predictor):
+        self.temporal = temporal_predictor
+        self.concept = concept_predictor
+        self.weights = {'temporal': 0.6, 'concept': 0.4}
+
+    async def predict_next(self, current_file: str, history: List[str]) -> List[Tuple[str, float]]:
+        """Combine temporal and conceptual predictions"""
+        # Get temporal predictions
+        temporal_preds = await self.temporal.predict_next(history)
+        
+        # Get conceptual predictions
+        concept_preds = await self.concept.find_semantic_matches(current_file)
+        
+        # Merge results
+        combined = {}
+        for pred, score in temporal_preds:
+            combined[pred] = score * self.weights['temporal']
+            
+        for pred, score in concept_preds:
+            if pred in combined:
+                combined[pred] += score * self.weights['concept']
+            else:
+                combined[pred] = score * self.weights['concept']
+                
+        return sorted(combined.items(), key=lambda x: x[1], reverse=True)
+
+# --------------------------
+# Usage Example
+# --------------------------
+
+async def demo():
+    print("=== Concept Bridge Demo ===")
+    
+    # Initialize predictors
+    concept_bridge = ConceptBridge()
+    temporal_predictor = TemporalRNNPredictor()  # From previous implementation
+    hybrid = HybridPredictor(temporal_predictor, concept_bridge)
+    
+    # Load sample documents
+    documents = {
+        "quantum_mechanics.txt": "Quantum superposition and entanglement phenomena",
+        "neural_networks.pdf": "Deep learning architectures using transformer models",
+        "bioinformatics.md": "DNA sequence analysis with machine learning",
+        "physics_paper.pdf": "Quantum field theory and particle interactions"
+    }
+    
+    # Index documents
+    for path, content in documents.items():
+        await concept_bridge.add_document(path, content)
+    
+    # Save state
+    await concept_bridge.save_state()
+    
+    # Query concepts
+    print("\nConceptual connections for 'quantum':")
+    quantum_files = await concept_bridge.get_concept_flow("quantum")
+    for f in quantum_files:
+        print(f"- {concept_bridge.file_embeddings[f]['path']}")
+    
+    # Semantic search
+    print("\nSemantic matches for 'machine learning':")
+    matches = await concept_bridge.find_semantic_matches("machine learning")
+    for path, score in matches:
+        print(f"- {path} ({score:.0%})")
+    
+    # Hybrid prediction
+    print("\nHybrid prediction after working on quantum files:")
+    history = ["quantum_mechanics.txt", "physics_paper.pdf"]
+    current = "quantum_mechanics.txt"
+    predictions = await hybrid.predict_next(current, history)
+    for path, score in predictions[:3]:
+        print(f"- {path} ({score:.0%})")
+
+if __name__ == "__main__":
+    asyncio.run(demo())
