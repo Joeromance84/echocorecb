@@ -1,0 +1,161 @@
+import numpy as np
+import asyncio
+import logging
+import random
+
+logger = logging.getLogger("ResearchMission")
+logger.setLevel(logging.INFO)
+
+class ResearchMission:
+    def __init__(self):
+        self.metrics = {
+            'cluster_cohesion': 0.0,  # Average semantic similarity within clusters
+            'cross_refs_found': 0,     # Valid cross-connections between docs
+            'timeline_consistency': 0.0 # Coherence of document evolution
+        }
+        
+    async def evaluate(self, output: dict):
+        clusters = output.get('clusters', [])
+        cross_refs = output.get('cross_references', [])
+        timelines = output.get('timelines', [])
+        
+        cohesion_scores = [c['similarity'] for c in clusters] if clusters else [0]
+        self.metrics['cluster_cohesion'] = np.mean(cohesion_scores)
+        
+        total_docs = max(len(output.get('documents', [])), 1)
+        self.metrics['cross_refs_found'] = len(cross_refs) / total_docs
+        
+        self.metrics['timeline_consistency'] = self.assess_timeline(timelines)
+        
+        # Composite score weighting
+        score = 0.6 * self.metrics['cluster_cohesion'] + \
+                0.3 * self.metrics['cross_refs_found'] + \
+                0.1 * self.metrics['timeline_consistency']
+
+        logger.info(f"Mission evaluation - Cohesion: {self.metrics['cluster_cohesion']:.3f}, "
+                    f"Cross-Refs: {self.metrics['cross_refs_found']:.3f}, "
+                    f"Timeline: {self.metrics['timeline_consistency']:.3f}, "
+                    f"Overall Score: {score:.3f}")
+        return score
+    
+    def assess_timeline(self, timelines):
+        # Placeholder for real timeline evaluation - checking for logical progression
+        if not timelines:
+            return 0.0
+        # For example, score consistency of timeline ordering and dependencies
+        return random.uniform(0.7, 0.9)  # Simulated high coherence
+    
+
+class CoreGovernance:
+    def __init__(self, agi):
+        self.agi = agi
+        self.reward_history = []
+        
+    async def execute_mission(self, mission):
+        # Phase 1 - Concept Dominant
+        await self.agi.hybrid.weights.update('concept', 0.75)
+        concept_output = await self.agi.concept.organize_research()
+        concept_reward = await mission.evaluate(concept_output)
+        await self.agi.hybrid.feedback('concept', concept_reward)
+        
+        # Phase 2 - Temporal Dominant
+        await self.agi.hybrid.weights.update('temporal', 0.75)
+        temporal_output = await self.agi.temporal.sequence_evolution(concept_output)
+        temporal_reward = await mission.evaluate(temporal_output)
+        await self.agi.hybrid.feedback('temporal', temporal_reward)
+        
+        total_reward = 0.5 * concept_reward + 0.5 * temporal_reward
+        self.reward_history.append(total_reward)
+        logger.info(f"Mission completed with combined reward: {total_reward:.3f}")
+        return total_reward
+
+# Example - Assumed implementations for ConceptBridge and Temporal Predictor methods:
+
+
+class ConceptBridge:
+    async def organize_research(self):
+        # 1. Embed documents using self.model.encode()
+        # 2. Cluster embeddings (e.g., k-means or community detection)
+        # 3. Detect cross-references by semantic similarity & metadata
+        # 4. Return:
+        #    {
+        #      'clusters':[{'similarity':float, 'docs':[...]}],
+        #      'cross_references':[('docA','docB'), ...],
+        #      'documents':[...],
+        #      'timelines':[] or base timeline placeholder
+        #    }
+        # Placeholder demo output:
+        return {
+            'clusters':[{'similarity':random.uniform(0.7,0.9), 'docs':['doc1','doc2']} for _ in range(5)],
+            'cross_references':[('doc1','doc3'), ('doc2','doc5')],
+            'documents':['doc1','doc2','doc3','doc4','doc5'],
+            'timelines':[]
+        }
+
+
+class TemporalPredictor:
+    async def sequence_evolution(self, concept_output):
+        # 1. Analyze concept_output clusters and cross-refs
+        # 2. Build temporal ordering graph between concepts
+        # 3. Return structure showing timeline coherence and progression
+        # Placeholder demo output:
+        return {
+            'clusters':concept_output['clusters'],
+            'cross_references':concept_output['cross_references'],
+            'documents':concept_output['documents'],
+            'timelines':[{'order': ['doc1', 'doc2', 'doc3', 'doc4', 'doc5']}],
+        }
+
+# Integration - AGI Core putting it all together:
+
+class AGICore:
+    def __init__(self):
+        self.temporal = TemporalPredictor()
+        self.concept = ConceptBridge()
+        self.hybrid = HybridPredictor(self.temporal, self.concept)
+    
+    async def feedback(self, source, reward):
+        await self.hybrid.feedback(source, reward)
+
+class HybridPredictor:
+    def __init__(self, temporal, concept):
+        self.temporal = temporal
+        self.concept = concept
+        self.weights = {"temporal": 0.5, "concept": 0.5}
+        self.lock = asyncio.Lock()
+        
+    async def feedback(self, source, reward):
+        async with self.lock:
+            lr = 0.05
+            if source == 'temporal':
+                self.weights['temporal'] += lr * (reward - 0.5)
+            elif source == 'concept':
+                self.weights['concept'] += lr * (reward - 0.5)
+            total = self.weights['temporal'] + self.weights['concept']
+            self.weights['temporal'] /= total
+            self.weights['concept'] /= total
+            logger.info(f"Updated weights: {self.weights}")
+
+    async def predict(self, file, history):
+        # Use weighted blending of individual predictions for example
+        # Here just dummy distribution:
+        return [('doc1', 0.5), ('doc2', 0.3), ('doc3', 0.2)]
+
+# Demo run:
+
+async def main():
+    agi = AGICore()
+    mission = ResearchMission()
+    governance = CoreGovernance(agi)
+    
+    # Simulate mission execution
+    reward = await governance.execute_mission(mission)
+    await agi.feedback('hybrid', reward)
+    print(f"Mission final reward: {reward:.3f}")
+    
+    # Show updated internal weights
+    print(f"Updated predictor weights: {agi.hybrid.weights}")
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
