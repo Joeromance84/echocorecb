@@ -1,0 +1,189 @@
+import networkx as nx
+import asyncio
+import logging
+from typing import Dict, List, Any, Optional
+from concurrent.futures import ThreadPoolExecutor
+
+# You may need to install dependencies:
+# pip install networkx transformers torch
+
+# For semantic embeddings
+from transformers import AutoModel, AutoTokenizer
+import torch
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("UnifiedCoreSystemIntegrationEngine")
+
+# ----------------------------
+# 1. External System Representation
+# ----------------------------
+class ExternalSystem:
+    def __init__(self, name: str, components: List[Dict[str, Any]]):
+        self.name = name
+        self.components = components
+
+
+# ----------------------------
+# 2. Map System Architecture To Graph
+# ----------------------------
+def map_system_to_graph(system: ExternalSystem) -> nx.DiGraph:
+    graph = nx.DiGraph()
+    for c in system.components:
+        graph.add_node(c["name"], **c)
+    # Naive inference: connect services to databases/caches
+    for i, comp_a in enumerate(system.components):
+        for j, comp_b in enumerate(system.components):
+            if i != j and comp_a.get("type") == "service" and comp_b.get("type") in ["database", "cache"]:
+                graph.add_edge(comp_a["name"], comp_b["name"])
+    logger.info(f"Mapped system '{system.name}' to graph with {graph.number_of_nodes()} nodes.")
+    return graph
+
+
+# ----------------------------
+# 3. Component Static & Semantic Analyzer
+# ----------------------------
+class SemanticAnalyzer:
+    def __init__(self, model_name: str = "microsoft/codebert-base"):
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = AutoModel.from_pretrained(model_name)
+        self.executor = ThreadPoolExecutor(max_workers=4)
+
+    def _embed_code_sync(self, code_snippet: str) -> torch.Tensor:
+        inputs = self.tokenizer(code_snippet, return_tensors="pt", truncation=True, max_length=256)
+        with torch.no_grad():
+            outputs = self.model(**inputs)
+        # Use CLS token embeddings
+        return outputs.last_hidden_state[:, 0, :].squeeze(0)
+
+    async def embed_code(self, code_snippet: str) -> List[float]:
+        loop = asyncio.get_running_loop()
+        vector = await loop.run_in_executor(self.executor, self._embed_code_sync, code_snippet)
+        return vector.tolist()
+
+    async def classify_component(self, code_snippet: str) -> str:
+        embedding = await self.embed_code(code_snippet)
+        # Dummy classifier: real implementation would use a trained classifier on embeddings
+        if "auth" in code_snippet.lower():
+            return "Authentication Service"
+        elif "cache" in code_snippet.lower():
+            return "Caching Layer"
+        elif len(code_snippet) < 100:
+            return "Utility Module"
+        else:
+            return "General Component"
+
+
+# ----------------------------
+# 4. Component Evaluator with Semantic Scoring
+# ----------------------------
+async def evaluate_component_semantic(attrs: Dict[str, Any], code_snippet: Optional[str], analyzer: SemanticAnalyzer) -> str:
+    # Evaluate security, performance heuristic
+    sec_level = attrs.get("security", "low").lower()
+    perf = attrs.get("performance", 0)
+
+    # Use semantic classification if code given
+    semantic_class = "Unknown"
+    if code_snippet:
+        semantic_class = await analyzer.classify_component(code_snippet)
+    logger.debug(f"Semantic class of {attrs.get('name')} is {semantic_class}")
+
+    # Composite heuristic
+    if sec_level == "high" and perf >= 8:
+        decision = "integrate"
+    elif perf >= 5:
+        decision = "adapt"
+    else:
+        decision = "observe"
+
+    # Example: boost decision if semantic matches critical services
+    if semantic_class in ["Authentication Service", "Caching Layer"] and decision == "observe":
+        decision = "adapt"
+
+    logger.info(f"Component '{attrs.get('name')}' evaluated as '{decision}' (sec:{sec_level}, perf:{perf}, semantic:{semantic_class})")
+    return decision
+
+
+# ----------------------------
+# 5. Knowledge Graph Integration & Agent Assignment
+# ----------------------------
+class KnowledgeGraph:
+    def __init__(self):
+        self.graph = nx.DiGraph()
+
+    async def merge_external_graph(self, ext_graph: nx.DiGraph, analyzer: SemanticAnalyzer, code_snippets: Dict[str, str]):
+        tasks = []
+        for node, attrs in ext_graph.nodes(data=True):
+            code_snippet = code_snippets.get(node)
+            tasks.append(self._evaluate_and_add_node(node, attrs, code_snippet, analyzer))
+        await asyncio.gather(*tasks)
+
+        for u, v, attrs in ext_graph.edges(data=True):
+            self.graph.add_edge(u, v, **attrs)
+            logger.info(f"Added edge {u} -> {v}")
+
+    async def _evaluate_and_add_node(self, node: str, attrs: Dict[str, Any], code_snippet: Optional[str], analyzer: SemanticAnalyzer):
+        decision = await evaluate_component_semantic(attrs, code_snippet, analyzer)
+        attrs = dict(attrs)  # Defensive copy
+        attrs["integration_decision"] = decision
+        self.graph.add_node(node, **attrs)
+        logger.info(f"Node '{node}' integrated with decision '{decision}'")
+
+        # Auto agent assignment (simulate)
+        if decision in ["integrate", "adapt"]:
+            self.spawn_or_update_agent(node, attrs)
+
+    def spawn_or_update_agent(self, component_name: str, attrs: Dict[str, Any]):
+        # Here you integrate with your Multi-Agent System Framework
+        logger.info(f"Spawning/updating agent for component '{component_name}' with attributes: {attrs}")
+
+    def visualize(self):
+        for node, attrs in self.graph.nodes(data=True):
+            print(f"Node: {node}, Attrs: {attrs}")
+        for u, v in self.graph.edges():
+            print(f"Edge: {u} -> {v}")
+
+    def get_decision_summary(self) -> Dict[str, List[str]]:
+        summary = {"integrate": [], "adapt": [], "observe": []}
+        for _, attrs in self.graph.nodes(data=True):
+            decision = attrs.get("integration_decision", "observe")
+            summary.setdefault(decision, []).append(attrs.get("name", "unknown"))
+        return summary
+
+
+# ----------------------------
+# 6. Prototype Entry Point with Sample Data
+# ----------------------------
+async def main():
+    # Sample external system with basic attributes and code snippets
+    external_sys = ExternalSystem(
+        name="ExternalSys1",
+        components=[
+            {"name": "AuthService", "type": "service", "security": "high", "performance": 9},
+            {"name": "CacheDB", "type": "database", "security": "medium", "performance": 10},
+            {"name": "Logger", "type": "service", "security": "low", "performance": 4}
+        ]
+    )
+
+    # Associated code snippets for semantic analysis (in reality, extracted via static/dynamic code parsing)
+    code_snippets = {
+        "AuthService": "def authenticate(user): ... # auth logic",
+        "CacheDB": "class CacheDB: # cache implementation",
+        "Logger": "def log(msg): print(msg)"
+    }
+
+    ext_graph = map_system_to_graph(external_sys)
+    kg = KnowledgeGraph()
+    analyzer = SemanticAnalyzer()
+
+    await kg.merge_external_graph(ext_graph, analyzer, code_snippets)
+
+    kg.visualize()
+
+    summary = kg.get_decision_summary()
+    print("\nIntegration Decision Summary:")
+    for decision, comps in summary.items():
+        print(f"{decision.capitalize()} components: {', '.join(comps)}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
