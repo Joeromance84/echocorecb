@@ -1,0 +1,334 @@
+import numpy as np
+from enum import Enum, auto
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional, Tuple
+import random
+import json
+from datetime import datetime, timedelta
+from collections import deque
+import hashlib
+
+# --------------------------
+# Core Enums
+# --------------------------
+
+class DriveType(Enum):
+    AUTONOMY = auto()    # Need for control
+    MASTERY = auto()     # Need for competence
+    PURPOSE = auto()     # Need for meaning
+    RELATEDNESS = auto() # Need for connection
+
+class TaskState(Enum):
+    DORMANT = auto()     # Not yet activated
+    ACTIVE = auto()      # Currently being worked on
+    COMPLETED = auto()   # Successfully finished
+    STALLED = auto()     # Stuck/abandoned
+
+# --------------------------
+# Data Models
+# --------------------------
+
+@dataclass
+class NeuroProfile:
+    """Biological motivation factors"""
+    dopamine_sensitivity: float = 0.7  # Reward response
+    cortisol_tolerance: float = 0.5    # Stress resilience
+    circadian_preference: str = "diurnal"  # diurnal/noon/evening
+    novelty_seeking: float = 0.6
+
+@dataclass 
+class PsychProfile:
+    """Psychological motivation factors"""
+    grit: float = 0.5                 # Perseverance
+    growth_mindset: float = 0.7        # Belief in improvement
+    self_efficacy: float = 0.6         # Belief in own capability
+
+@dataclass
+class Task:
+    id: str
+    title: str
+    difficulty: float          # 0-1 scale
+    significance: float        # 0-1 scale
+    deadline: Optional[datetime] = None
+    state: TaskState = TaskState.DORMANT
+    sub_tasks: List['Task'] = field(default_factory=list)
+    energy_required: float = 0.5  # Mental energy needed (0-1)
+    reward_profile: Dict[str, float] = field(default_factory=lambda: {
+        "dopamine": 0.3,
+        "satisfaction": 0.5
+    })
+
+@dataclass
+class EngagementState:
+    current_energy: float = 0.8
+    current_focus: float = 0.7
+    current_stress: float = 0.3
+    motivation_sources: Dict[DriveType, float] = field(default_factory=lambda: {
+        DriveType.AUTONOMY: 0.6,
+        DriveType.MASTERY: 0.7,
+        DriveType.PURPOSE: 0.5,
+        DriveType.RELATEDNESS: 0.4
+    })
+
+# --------------------------
+# Unified Motivation Engine
+# --------------------------
+
+class MotivationCore:
+    def __init__(self, neuro_profile: NeuroProfile, psych_profile: PsychProfile):
+        self.neuro = neuro_profile
+        self.psych = psych_profile
+        self.state = EngagementState()
+        self.tasks: List[Task] = []
+        self.history = deque(maxlen=100)  # Circular buffer of recent events
+        
+        # Dynamic adaptation parameters
+        self.adaptation_rate = 0.1
+        self.recent_success_rate = 0.7
+        self.task_buffer = []
+        
+        # Initialize with circadian rhythms
+        self._update_circadian_weights()
+    
+    def _update_circadian_weights(self):
+        """Adjust parameters based on time of day"""
+        hour = datetime.now().hour
+        if 5 <= hour < 10:  # Morning
+            self.circadian_multipliers = {
+                "focus": 1.2,
+                "energy": 0.9,
+                "stress_resilience": 0.8
+            }
+        elif 10 <= hour < 15:  # Midday
+            self.circadian_multipliers = {
+                "focus": 1.0,
+                "energy": 1.1,
+                "stress_resilience": 1.0
+            }
+        else:  # Evening
+            self.circadian_multipliers = {
+                "focus": 0.7,
+                "energy": 0.8,
+                "stress_resilience": 1.2
+            }
+    
+    def add_task(self, task: Task):
+        """Add a new task with auto-generated subtasks"""
+        if not task.sub_tasks:
+            task.sub_tasks = self._generate_subtasks(task)
+        self.tasks.append(task)
+        self._update_motivation_state("dopamine", 0.1)
+        self.history.append(("task_added", task.id, datetime.now()))
+    
+    def _generate_subtasks(self, parent_task: Task) -> List[Task]:
+        """Break task into psychologically optimized subtasks"""
+        count = max(2, min(5, int(parent_task.difficulty * 4)))
+        subtasks = []
+        
+        for i in range(count):
+            subtask_id = f"{parent_task.id}-st{i}"
+            difficulty = parent_task.difficulty * (0.3 + 0.7*(i/count))
+            
+            # Create reward profile based on neuro preferences
+            reward_profile = {
+                "dopamine": 0.2 + 0.3 * (i/count) * self.neuro.dopamine_sensitivity,
+                "satisfaction": 0.4 + 0.4 * (1 - i/count)
+            }
+            
+            subtasks.append(Task(
+                id=subtask_id,
+                title=f"{parent_task.title} subtask {i+1}",
+                difficulty=difficulty,
+                significance=parent_task.significance * 0.7,
+                energy_required=parent_task.energy_required * (0.5 + 0.5*(i/count)),
+                reward_profile=reward_profile
+            ))
+        
+        return subtasks
+    
+    def get_optimal_task(self) -> Optional[Tuple[Task, float]]:
+        """Select best task using unified motivation calculus"""
+        if not self.tasks:
+            return None
+        
+        # Score all available tasks
+        scored_tasks = []
+        for task in self.tasks:
+            if task.state == TaskState.DORMANT or task.state == TaskState.STALLED:
+                score = self._calculate_task_score(task)
+                scored_tasks.append((score, task))
+        
+        if not scored_tasks:
+            return None
+        
+        # Apply softmax selection for some randomness
+        scores = np.array([s[0] for s in scored_tasks])
+        exp_scores = np.exp(scores - np.max(scores))
+        probs = exp_scores / exp_scores.sum()
+        
+        selected_idx = np.random.choice(len(scored_tasks), p=probs)
+        return scored_tasks[selected_idx][1], probs[selected_idx]
+    
+    def _calculate_task_score(self, task: Task) -> float:
+        """Unified motivation score combining multiple factors"""
+        # 1. Biological factors
+        neuro_score = 0.0
+        for nt, amount in task.reward_profile.items():
+            if nt == "dopamine":
+                neuro_score += amount * self.neuro.dopamine_sensitivity
+            elif nt == "satisfaction":
+                neuro_score += amount * (1 - self.state.current_stress)
+        
+        # 2. Psychological factors
+        psych_score = (task.significance * self.psych.growth_mindset * 0.5 +
+                      (1 - task.difficulty) * self.psych.self_efficacy * 0.3 +
+                      self.psych.grit * 0.2)
+        
+        # 3. State alignment
+        energy_match = 1 - abs(self.state.current_energy - task.energy_required)
+        focus_alignment = self.state.current_focus * self.circadian_multipliers["focus"]
+        
+        # 4. Urgency factor
+        urgency = 0.0
+        if task.deadline:
+            hours_left = (task.deadline - datetime.now()).total_seconds() / 3600
+            urgency = 1.0 / max(1, hours_left / 24)
+        
+        # Combined unified score
+        unified_score = (
+            neuro_score * 0.4 +
+            psych_score * 0.3 +
+            (energy_match + focus_alignment) * 0.15 +
+            urgency * 0.15
+        )
+        
+        return unified_score
+    
+    def start_task(self, task_id: str) -> bool:
+        """Mark a task as active"""
+        task = self._find_task(task_id)
+        if task and task.state == TaskState.DORMANT:
+            task.state = TaskState.ACTIVE
+            self.history.append(("task_started", task_id, datetime.now()))
+            return True
+        return False
+    
+    def complete_task(self, task_id: str, performance: float = 1.0) -> bool:
+        """Mark a task as completed with performance rating (0-1)"""
+        task = self._find_task(task_id)
+        if task and task.state == TaskState.ACTIVE:
+            task.state = TaskState.COMPLETED
+            
+            # Update neuro state based on task rewards
+            for nt, amount in task.reward_profile.items():
+                self._update_motivation_state(nt, amount * performance)
+            
+            # Update success rate
+            self.recent_success_rate = (
+                0.9 * self.recent_success_rate + 
+                0.1 * performance
+            )
+            
+            # Log completion
+            self.history.append(("task_completed", task_id, datetime.now(), performance))
+            return True
+        return False
+    
+    def _find_task(self, task_id: str) -> Optional[Task]:
+        """Find task by ID (including subtasks)"""
+        for task in self.tasks:
+            if task.id == task_id:
+                return task
+            for subtask in task.sub_tasks:
+                if subtask.id == task_id:
+                    return subtask
+        return None
+    
+    def _update_motivation_state(self, factor: str, delta: float):
+        """Update internal motivation state with decay"""
+        # Simple implementation - would be more nuanced in production
+        if factor == "dopamine":
+            self.state.current_energy = min(1.0, self.state.current_energy + delta * 0.5)
+            self.state.current_focus = min(1.0, self.state.current_focus + delta * 0.3)
+        elif factor == "satisfaction":
+            self.state.current_stress = max(0.0, self.state.current_stress - delta * 0.4)
+    
+    def adapt_difficulty(self):
+        """Dynamically adjust task difficulties based on performance"""
+        avg_difficulty = np.mean([t.difficulty for t in self.tasks if t.state == TaskState.COMPLETED])
+        
+        if self.recent_success_rate > 0.8:  # Too easy
+            adjustment = 1 + self.adaptation_rate
+        elif self.recent_success_rate < 0.5:  # Too hard
+            adjustment = 1 - self.adaptation_rate
+        else:
+            return
+        
+        for task in self.tasks:
+            if task.state == TaskState.DORMANT:
+                task.difficulty = min(0.95, task.difficulty * adjustment)
+                for subtask in task.sub_tasks:
+                    subtask.difficulty = min(0.95, subtask.difficulty * adjustment)
+
+# --------------------------
+# Usage Example
+# --------------------------
+
+def demo():
+    # Create profiles
+    neuro = NeuroProfile(
+        dopamine_sensitivity=0.8,
+        cortisol_tolerance=0.6,
+        novelty_seeking=0.7
+    )
+    psych = PsychProfile(
+        grit=0.7,
+        growth_mindset=0.8,
+        self_efficacy=0.65
+    )
+    
+    # Initialize engine
+    engine = MotivationCore(neuro, psych)
+    
+    # Add some tasks
+    coding_task = Task(
+        id="task1",
+        title="Implement adaptive motivation system",
+        difficulty=0.7,
+        significance=0.9,
+        deadline=datetime.now() + timedelta(days=3)
+    )
+    engine.add_task(coding_task)
+    
+    research_task = Task(
+        id="task2",
+        title="Study cognitive evaluation theory",
+        difficulty=0.5,
+        significance=0.7
+    )
+    engine.add_task(research_task)
+    
+    # Simulation loop
+    for day in range(1, 4):
+        print(f"\n=== Day {day} ===")
+        
+        # Get optimal task
+        task, score = engine.get_optimal_task()
+        if task:
+            print(f"Recommended task: {task.title} (score: {score:.2f})")
+            print(f"Difficulty: {task.difficulty:.1f}, Energy needed: {task.energy_required:.1f}")
+            
+            # Simulate working on it
+            engine.start_task(task.id)
+            performance = 0.7 + random.random() * 0.3  # 70-100% performance
+            engine.complete_task(task.id, performance)
+            print(f"Completed with {performance:.0%} performance")
+            
+            # Show state
+            print(f"Energy: {engine.state.current_energy:.1f}, Focus: {engine.state.current_focus:.1f}")
+            
+            # Adapt difficulty
+            engine.adapt_difficulty()
+
+if __name__ == "__main__":
+    demo()
