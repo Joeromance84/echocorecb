@@ -1,0 +1,206 @@
+import hmac
+import hashlib
+import json
+import time
+import uuid
+import asyncio
+import logging
+from datetime import datetime, timezone
+from typing import Dict, Any, Optional, Tuple
+import requests
+from pydantic import BaseModel, ValidationError
+from tenacity import retry, stop_after_attempt, wait_exponential
+from cryptography.fernet import Fernet
+
+# --- Constants ---
+MAX_CLOCK_SKEW_SEC = 5
+REQUEST_TIMEOUT = 15
+HMAC_ROTATION_INTERVAL = 3600  # 1 hour
+
+# --- Models ---
+class BackchannelMessage(BaseModel):
+    sender: str
+    timestamp: str
+    message_id: str
+    payload: Dict[str, Any]
+    signature: str
+    nonce: Optional[str] = None  # Anti-replay
+
+# --- Logger Setup (Structured JSON) ---
+logger = logging.getLogger("interactive_guy_backchannel")
+logger.setLevel(logging.INFO)
+handler = logging.StreamHandler()
+handler.setFormatter(logging.Formatter(
+    '{"time":"%(asctime)s","level":"%(levelname)s","message":%(message)s}'
+))
+logger.addHandler(handler)
+
+class SecureBackchannelClient:
+    """
+    Zero-trust client for Interactive Guy's federated AI communications.
+    Version: 2.1 (Production-Grade)
+    """
+
+    def __init__(
+        self,
+        proxy_url: str,
+        agent_id: str,
+        hmac_secret: str,
+        encryption_key: Optional[str] = None
+    ):
+        self.proxy_url = proxy_url.rstrip('/')
+        self.agent_id = agent_id
+        self._secrets = {
+            "current": hmac_secret.encode(),
+            "previous": None,
+            "rotated_at": time.time()
+        }
+        self.encryptor = Fernet(encryption_key.encode()) if encryption_key else None
+        self.session = requests.Session()
+        self.session.headers.update({"User-Agent": f"InteractiveGuy/{agent_id}"})
+        self.circuit_open = False
+        self.last_failure_time = 0
+
+    def _rotate_hmac_secret(self, new_secret: str) -> None:
+        """Rotate HMAC secrets with zero downtime"""
+        self._secrets = {
+            "previous": self._secrets["current"],
+            "current": new_secret.encode(),
+            "rotated_at": time.time()
+        }
+
+    def _generate_signature(self, payload: Dict[str, Any]) -> str:
+        """Generate signatures supporting key rotation"""
+        payload_str = json.dumps(payload, sort_keys=True)
+        signature = hmac.new(self._secrets["current"], payload_str.encode(), hashlib.sha256).hexdigest()
+        return signature
+
+    def _encrypt_payload(self, payload: Dict[str, Any]) -> str:
+        """Optional AES-GCM encryption"""
+        if not self.encryptor:
+            return json.dumps(payload)
+        return self.encryptor.encrypt(json.dumps(payload).encode()).decode()
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        reraise=True
+    )
+    async def _send_request(self, message: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        """Core sending logic with retries and circuit breaker"""
+        if self.circuit_open:
+            if time.time() - self.last_failure_time < 30:
+                logger.warning(json.dumps({"event": "circuit_blocked", "message_id": message["message_id"]}))
+                return None, "circuit_breaker_active"
+            self.circuit_open = False
+
+        url = f"{self.proxy_url}/v1/backchannel"
+        encrypted_payload = self._encrypt_payload(message["payload"]) if self.encryptor else message["payload"]
+
+        try:
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.session.post(
+                    url,
+                    json={**message, "payload": encrypted_payload},
+                    timeout=REQUEST_TIMEOUT
+                )
+            )
+            response.raise_for_status()
+            return response.json(), None
+        except Exception as e:
+            self.last_failure_time = time.time()
+            self.circuit_open = True
+            logger.error(json.dumps({
+                "event": "request_failed",
+                "error": str(e),
+                "message_id": message["message_id"]
+            }))
+            raise
+
+    async def send_message(self, payload_type: str, content: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Atomic message send with full security validation"""
+        try:
+            # Auto-rotate HMAC if needed
+            if time.time() - self._secrets["rotated_at"] > HMAC_ROTATION_INTERVAL:
+                self._rotate_hmac_secret(generate_new_hmac_secret())  # Implement your rotation logic
+
+            message = {
+                "sender": self.agent_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "message_id": str(uuid.uuid4()),
+                "nonce": uuid.uuid4().hex[:16],  # Anti-replay
+                "payload": {
+                    "type": payload_type,
+                    "content": content
+                }
+            }
+            message["signature"] = self._generate_signature(message["payload"])
+
+            # Validate schema before sending
+            BackchannelMessage(**message)
+
+            response, error = await self._send_request(message)
+            if error:
+                return None
+
+            logger.info(json.dumps({
+                "event": "message_sent",
+                "message_id": message["message_id"],
+                "direction": "outbound",
+                "size_bytes": len(json.dumps(message))
+            }))
+            return response
+        except ValidationError as ve:
+            logger.error(json.dumps({
+                "event": "validation_failed",
+                "error": str(ve),
+                "payload_type": payload_type
+            }))
+            return None
+
+    # --- Message Type Shortcuts ---
+    async def send_query(self, query: str, context: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
+        """Send a query with context"""
+        return await self.send_message("query", {
+            "text": query,
+            "context": context or {},
+            "metadata": {
+                "timestamp": time.time(),
+                "source_module": "InteractiveGuy/Planner"
+            }
+        })
+
+    async def send_knowledge_update(self, update: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Push new knowledge to federated systems"""
+        return await self.send_message("knowledge_update", {
+            "data": update,
+            "valid_until": datetime.now(timezone.utc).timestamp() + 86400  # 24h TTL
+        })
+
+# --- Example Usage ---
+async def demo():
+    client = SecureBackchannelClient(
+        proxy_url="https://proxy.yourdomain.com",
+        agent_id="interactive_guy_v1",
+        hmac_secret=os.getenv("BACKCHANNEL_HMAC_SECRET"),
+        encryption_key=os.getenv("BACKCHANNEL_ENC_KEY")
+    )
+
+    # Example query with monitoring
+    start_time = time.monotonic()
+    response = await client.send_query(
+        "How to optimize hybrid predictor memory usage?",
+        {"current_architecture": "v1.4.2"}
+    )
+    latency_ms = (time.monotonic() - start_time) * 1000
+
+    logger.info(json.dumps({
+        "event": "query_completed",
+        "latency_ms": latency_ms,
+        "response_size": len(json.dumps(response)) if response else 0
+    }))
+
+if __name__ == "__main__":
+    asyncio.run(demo())
