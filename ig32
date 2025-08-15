@@ -1,0 +1,317 @@
+import numpy as np
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+from sentence_transformers import SentenceTransformer
+from sklearn.neighbors import NearestNeighbors
+from enum import Enum
+from typing import List, Dict, Tuple, Optional, Any
+import hashlib
+import json
+from pathlib import Path
+import asyncio
+import logging
+import random
+import time
+
+# Logger setup
+logger = logging.getLogger("agi_research_engine")
+if not logger.hasHandlers():
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('[%(asctime)s][%(levelname)s] %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+
+# --- Ontology & Quantum Cognition Core (Omega Engine) ---
+class OmegaEngine:
+    def __init__(self):
+        self.memory = []
+        self.harmony_score = 1.0
+
+    async def perceive(self, raw_data: np.ndarray):
+        # Simulate complex embedding in 11D hyperspace
+        coords = np.random.uniform(-1, 1, 11)
+        entangle_id = hashlib.sha256(raw_data.tobytes() + str(time.time()).encode()).hexdigest()
+        frame = {'coords': coords, 'entangle_id': entangle_id}
+        self.memory.append(frame)
+        logger.info(f"OmegaEngine: New frame perceived: {entangle_id[:8]}")
+        return frame
+
+    async def interrogate(self, frame):
+        questions = [
+            f"WHERE: {frame['coords'][:3]} coordinates",
+            "WHEN: multi-temporal timeline active",
+            "WHY: fractal causality embedding"
+        ]
+        self.harmony_score *= 0.995  # Simulate entropy decay
+        logger.info("OmegaEngine: Interrogation complete")
+        return {"questions": questions, "harmony": self.harmony_score}
+
+# --- Temporal RNN Predictor ---
+class TemporalPredictor:
+    def __init__(self, vocab_size=10, embed_dim=64, rnn_units=128):
+        self.vocab_size = vocab_size
+        self.embed_dim = embed_dim
+        self.rnn_units = rnn_units
+        self.vocab = []
+        self.vocab_to_int = {}
+        self.int_to_vocab = {}
+        self.window_size = 5
+        self.model = self._build_model()
+
+    def _build_model(self):
+        model = keras.Sequential([
+            layers.Embedding(self.vocab_size, self.embed_dim),
+            layers.LSTM(self.rnn_units),
+            layers.Dense(self.vocab_size, activation='softmax')
+        ])
+        model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+        return model
+
+    def train(self, sequences: List[List[str]], epochs=50, batch_size=32):
+        self.vocab = sorted({w for s in sequences for w in s})
+        self.vocab_to_int = {w: i for i, w in enumerate(self.vocab)}
+        self.int_to_vocab = {i: w for i, w in enumerate(self.vocab)}
+        self.vocab_size = len(self.vocab)
+        self.model = self._build_model()
+
+        X, y = [], []
+        for seq in sequences:
+            for i in range(len(seq) - 1):
+                if i + 1 < self.window_size:
+                    continue
+                context = seq[i+1 - self.window_size:i+1]
+                X.append([self.vocab_to_int[w] for w in context])
+                y.append(self.vocab_to_int[seq[i+1]])
+        if not X:
+            raise ValueError("Insufficient data for training.")
+        X = keras.preprocessing.sequence.pad_sequences(X, maxlen=self.window_size, padding='pre')
+        y = keras.utils.to_categorical(y, num_classes=self.vocab_size)
+        self.model.fit(X, y, epochs=epochs, batch_size=batch_size, verbose=0)
+        logger.info("TemporalPredictor: Training complete.")
+
+    async def predict(self, history: List[str]) -> List[Tuple[str, float]]:
+        if not self.vocab_to_int:
+            return []
+        seq_ints = [self.vocab_to_int.get(w, 0) for w in history[-self.window_size:]]
+        seq_ints_padded = keras.preprocessing.sequence.pad_sequences([seq_ints], maxlen=self.window_size, padding='pre')
+        preds = self.model.predict(seq_ints_padded, verbose=0)[0]
+        results = [(self.int_to_vocab[i], float(score)) for i, score in enumerate(preds)]
+        return sorted(results, key=lambda x: x[1], reverse=True)
+
+# --- Conceptual Semantic Bridge ---
+class ConceptBridge:
+    def __init__(self, storage_path='concept_store'):
+        self.model = SentenceTransformer('all-mpnet-base-v2')
+        self.storage_path = Path(storage_path)
+        self.storage_path.mkdir(exist_ok=True)
+        self.file_embeddings = {}
+        self.graph = {}
+        self.knn = None
+
+    async def add_document(self, path: str, content: str):
+        fid = hashlib.md5(path.encode()).hexdigest()
+        embedding = self.model.encode(content)
+        concepts = list({w for w in content.lower().split() if len(w) > 4 and w.isalpha()})[:5]
+        self.file_embeddings[fid] = {'path': path, 'embedding': embedding, 'concepts': concepts}
+        for c in concepts:
+            self.graph.setdefault(c, set()).add(fid)
+        self._update_knn()
+        logger.info(f"ConceptBridge: Added document {path}")
+
+    def _update_knn(self):
+        if not self.file_embeddings:
+            return
+        embeddings = np.array([v['embedding'] for v in self.file_embeddings.values()])
+        self.knn = NearestNeighbors(n_neighbors=5, metric='cosine')
+        self.knn.fit(embeddings)
+
+    async def find_closest(self, query: str, top_k=5) -> List[Tuple[str, float]]:
+        if not self.knn:
+            return []
+        q_emb = self.model.encode(query)
+        distances, indices = self.knn.kneighbors([q_emb], n_neighbors=top_k)
+        keys = list(self.file_embeddings.keys())
+        return [(self.file_embeddings[keys[i]]['path'], float(1 - dist)) for dist, i in zip(distances[0], indices[0])]
+
+    async def save_state(self):
+        data = {
+            'file_embeddings': {k: {'path': v['path'], 'embedding': v['embedding'].tolist(), 'concepts': v['concepts']} for k,v in self.file_embeddings.items()},
+            'graph': {k:list(v) for k,v in self.graph.items()}
+        }
+        with open(self.storage_path / 'concepts.json', 'w') as f:
+            json.dump(data, f)
+        logger.info("ConceptBridge: State saved.")
+
+    async def load_state(self):
+        p = self.storage_path / 'concepts.json'
+        if p.exists():
+            with open(p) as f:
+                data = json.load(f)
+            self.file_embeddings = {k:{'path': v['path'], 'embedding': np.array(v['embedding']), 'concepts': v['concepts']} for k,v in data['file_embeddings'].items()}
+            self.graph = {k:set(v) for k,v in data['graph'].items()}
+            self._update_knn()
+            logger.info("ConceptBridge: State loaded.")
+
+# --- Feedback Loop ---
+class FeedbackLoop:
+    def __init__(self, start_temporal=0.5, start_concept=0.5):
+        self.temporal_weight = start_temporal
+        self.concept_weight = start_concept
+        self.learning_rate = 0.05
+
+    async def get_weights(self) -> Dict[str,float]:
+        return {'temporal': self.temporal_weight, 'concept': self.concept_weight}
+
+    async def update_weights(self, source: str, reward: float):
+        if source == 'temporal':
+            self.temporal_weight += reward * self.learning_rate
+            self.temporal_weight = max(0.1, min(1.0, self.temporal_weight))
+            self.concept_weight = 1.0 - self.temporal_weight
+        elif source == 'concept':
+            self.concept_weight += reward * self.learning_rate
+            self.concept_weight = max(0.1, min(1.0, self.concept_weight))
+            self.temporal_weight = 1.0 - self.concept_weight
+        logger.info(f"FeedbackLoop: Updated weights: temporal={self.temporal_weight:.3f}, concept={self.concept_weight:.3f}")
+
+# --- Hybrid Predictor ---
+class HybridPredictor:
+    def __init__(self, temporal_pred: TemporalPredictor, concept_bridge: ConceptBridge):
+        self.temporal = temporal_pred
+        self.concept = concept_bridge
+        self.weights = FeedbackLoop()
+
+    async def predict(self, current_file: str, history: List[str]) -> List[Tuple[str,float]]:
+        weights = await self.weights.get_weights()
+        temporal_preds = await self.temporal.predict(history)
+        concept_preds = await self.concept.find_closest(current_file)
+
+        combined = {}
+        for p,s in temporal_preds:
+            combined[p] = combined.get(p,0.0) + s * weights['temporal']
+        for p,s in concept_preds:
+            combined[p] = combined.get(p,0.0) + s * weights['concept']
+
+        total = sum(combined.values())
+        if total > 0:
+            combined = {k:v/total for k,v in combined.items()}
+
+        return sorted(combined.items(), key=lambda x:-x[1])
+
+    async def provide_feedback(self, source: str, reward: float):
+        await self.weights.update_weights(source, reward)
+
+# --- Research Mission Definition ---
+class ResearchMission:
+    def __init__(self):
+        self.metrics = {
+            'cluster_cohesion': 0.0,
+            'cross_refs': 0,
+            'timeline_consistency': 0.0
+        }
+
+    async def evaluate(self, output: Dict) -> float:
+        cohesion = np.mean([c['similarity'] for c in output.get('clusters',[])]) if output.get('clusters') else 0
+        cross_refs = len(output.get('cross_refs',[])) / max(1,len(output.get('documents',[])))
+        timeline = self.assess_timeline(output.get('timelines',[]))
+        score = 0.6*cohesion + 0.3*cross_refs + 0.1*timeline
+        logger.info(f"Mission evaluation score: {score:.3f}")
+        return score
+
+    def assess_timeline(self, timelines) -> float:
+        # Placeholder: Actual timeline consistency logic needed
+        return 0.85
+
+# --- Core Governance (Reward & Execution) ---
+class CoreGovernance:
+    def __init__(self, agi):
+        self.agi = agi
+        self.history = []
+
+    async def run_mission(self, mission: ResearchMission):
+        # 1. Concept dominant phase
+        await self.agi.hybrid.weights.update_weights('concept', 0.8)
+        concept_output = await self.agi.concept.organize_research(mission)
+        concept_reward = await mission.evaluate(concept_output)
+        await self.agi.hybrid.provide_feedback('concept', concept_reward)
+
+        # 2. Temporal dominant phase
+        await self.agi.hybrid.weights.update_weights('temporal', 0.8)
+        temporal_output = await self.agi.temporal.sequence_evolution(mission)
+        temporal_reward = await mission.evaluate(temporal_output)
+        await self.agi.hybrid.provide_feedback('temporal', temporal_reward)
+
+        # Final combined score
+        combined_score = 0.5*concept_reward + 0.5*temporal_reward
+        logger.info(f"Mission combined reward: {combined_score:.3f}")
+        self.history.append({
+            'concept': concept_reward,
+            'temporal': temporal_reward,
+            'combined': combined_score,
+            'timestamp': time.time()
+        })
+        return combined_score
+
+# --- Stub implementations for advanced methods used in CoreGovernance ---
+async def organize_research_stub(mission):
+    # Simulate clustering, referencing, timelines
+    return {
+        'clusters': [{'similarity': random.uniform(0.6,0.9)} for _ in range(5)],
+        'cross_refs': [1]*20,
+        'documents': [1]*100,
+        'timelines': [1]*5
+    }
+
+async def sequence_evolution_stub(mission):
+    return {
+        'clusters': [{'similarity': random.uniform(0.5,0.8)} for _ in range(5)],
+        'cross_refs': [1]*15,
+        'documents': [1]*100,
+        'timelines': [1]*7
+    }
+
+# --- Assemble the AGI with all components ---
+class AdvancedAGI:
+    def __init__(self):
+        self.omega = OmegaEngine()
+        self.celestial = None  # Integrate CelestialEngine similarly if needed
+        self.temporal = TemporalPredictor()
+        self.concept = ConceptBridge()
+        self.concept.organize_research = organize_research_stub
+        self.temporal.sequence_evolution = sequence_evolution_stub
+        self.hybrid = HybridPredictor(self.temporal, self.concept)
+
+    async def feedback(self, source: str, reward: float):
+        await self.hybrid.provide_feedback(source, reward)
+
+# --- Define main async runner for demonstration ---
+async def main():
+    agi = AdvancedAGI()
+
+    # New research mission
+    mission = ResearchMission()
+    governance = CoreGovernance(agi)
+
+    # Simulate perception cycle
+    perception_input = np.random.rand(256)
+    frame = await agi.omega.perceive(perception_input)
+    interrogation = await agi.omega.interrogate(frame)
+    logger.info(f"Perception & interrogation result: {interrogation}")
+
+    # Execute mission, get rewards, update feedback loop
+    combined_reward = await governance.run_mission(mission)
+    await agi.feedback('hybrid', combined_reward)
+
+    # Simulate prediction usage
+    predictions = await agi.hybrid.predict('project_paper.pdf', ['intro_notes.txt', 'summary.md'])
+    logger.info("Top predictions:")
+    for path, score in predictions[:5]:
+        print(f"{path}: {score:.3%}")
+
+    # Output final weights
+    weights = await agi.hybrid.weights.get_weights()
+    logger.info(f"Updated hybrid weights after mission: {weights}")
+
+if __name__ == '__main__':
+    asyncio.run(main())
