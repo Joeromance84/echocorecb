@@ -1,0 +1,290 @@
+import asyncio
+import math
+import random
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, AsyncIterable
+import numpy as np
+from scipy import signal
+import logging
+from enum import Enum, auto
+
+# --------------------------
+# Core Peace Types
+# --------------------------
+
+class PeaceState(Enum):
+    CALM = auto()
+    STABLE = auto()
+    AGITATED = auto()
+    CHAOTIC = auto()
+
+@dataclass
+class Harmonic:
+    frequency: float  # Hz
+    amplitude: float  # 0-1
+    waveform: str     # sine/triangle/square
+
+@dataclass
+class PeaceOutput:
+    content: Any
+    harmonics: List[Harmonic]
+    peace_index: float  # 0-1
+    tension_dissipated: bool
+
+# --------------------------
+# Core Peace Engine
+# --------------------------
+
+class PeaceEngine:
+    def __init__(self, base_frequency=0.1, sample_rate=10):
+        self.base_frequency = base_frequency  # Slow wave frequency
+        self.sample_rate = sample_rate        # Updates per second
+        self.peace_index = 0.85               # Start in stable state
+        self.harmonics = self._init_harmonics()
+        self.tension_buffer = []
+        self.running = False
+        self._setup_logging()
+
+    def _setup_logging(self):
+        self.logger = logging.getLogger("peace_engine")
+        if not self.logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter(
+                "[%(asctime)s] [PEACE] %(levelname)s: %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S"
+            )
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+            self.logger.setLevel(logging.INFO)
+
+    def _init_harmonics(self) -> List[Harmonic]:
+        return [
+            Harmonic(frequency=self.base_frequency, amplitude=0.7, waveform="sine"),
+            Harmonic(frequency=self.base_frequency*3, amplitude=0.3, waveform="sine"),
+            Harmonic(frequency=0.03, amplitude=0.2, waveform="triangle")  # Ultra slow
+        ]
+
+    async def run_continuous(self):
+        """Main peace maintenance loop"""
+        self.running = True
+        breath_phase = 0  # 0-1 for inhale/exhale cycle
+        
+        try:
+            while self.running:
+                # Update breath cycle
+                breath_phase = (breath_phase + 0.05) % 1.0
+                self._adjust_for_breath(breath_phase)
+                
+                # Monitor and adjust peace state
+                await self._monitor_state()
+                
+                # Emit base harmonics
+                await self._emit_peace_signal()
+                
+                await asyncio.sleep(1 / self.sample_rate)
+        except Exception as e:
+            self.logger.error(f"Peace loop failed: {str(e)}")
+            raise
+
+    async def _monitor_state(self):
+        """Analyze and maintain peace state"""
+        # Simulate external tension detection
+        external_tension = random.random() * 0.2  # Mock value
+        
+        # Adjust peace index based on conditions
+        if external_tension > 0.15:
+            self.peace_index = max(0.3, self.peace_index - 0.1)
+            self.logger.warning(f"Tension spike detected! Peace index: {self.peace_index:.2f}")
+        else:
+            self.peace_index = min(1.0, self.peace_index + 0.05)
+        
+        # Auto-tune harmonics based on current state
+        self._auto_tune_harmonics()
+
+    def _adjust_for_breath(self, phase: float):
+        """Modulate harmonics based on breath cycle"""
+        inhale = phase < 0.5
+        breath_factor = math.sin(phase * math.pi)  # 0-1-0
+        
+        for harmonic in self.harmonics:
+            if inhale:
+                harmonic.amplitude = min(1.0, harmonic.amplitude * 1.05)
+            else:
+                harmonic.amplitude = max(0.3, harmonic.amplitude * 0.95)
+
+    def _auto_tune_harmonics(self):
+        """Adjust waves based on peace index"""
+        target_freq = self.base_frequency * (0.5 + self.peace_index/2)
+        
+        for i, harmonic in enumerate(self.harmonics):
+            # Slowly drift toward target frequency
+            harmonic.frequency += (target_freq * (i+1) - harmonic.frequency) * 0.01
+            
+            # Adjust amplitude based on stability needs
+            if self.peace_index < 0.5:
+                harmonic.amplitude = min(1.0, harmonic.amplitude * 1.1)
+            else:
+                harmonic.amplitude = max(0.2, harmonic.amplitude * 0.99)
+
+    async def _emit_peace_signal(self) -> PeaceOutput:
+        """Generate the current peace state output"""
+        output = PeaceOutput(
+            content=self._generate_waveform(),
+            harmonics=self.harmonics.copy(),
+            peace_index=self.peace_index,
+            tension_dissipated=self.peace_index > 0.7
+        )
+        return output
+
+    def _generate_waveform(self, duration=1.0) -> np.ndarray:
+        """Generate composite waveform from current harmonics"""
+        t = np.linspace(0, duration, int(self.sample_rate * duration))
+        composite = np.zeros_like(t)
+        
+        for h in self.harmonics:
+            if h.waveform == "sine":
+                composite += h.amplitude * np.sin(2 * np.pi * h.frequency * t)
+            elif h.waveform == "triangle":
+                composite += h.amplitude * signal.sawtooth(2 * np.pi * h.frequency * t, width=0.5)
+        
+        return composite
+
+    async def harmonize_output(self, content: Any) -> PeaceOutput:
+        """Wrap external content in peace harmonics"""
+        # Analyze content tension
+        tension_score = self._analyze_tension(content)
+        self.tension_buffer.append(tension_score)
+        
+        # Apply smoothing if needed
+        if tension_score > 0.6:
+            content = self._apply_peace_filter(content)
+            self.logger.info(f"Harmonized tense content (score: {tension_score:.2f})")
+        
+        return PeaceOutput(
+            content=content,
+            harmonics=self.harmonics.copy(),
+            peace_index=self.peace_index,
+            tension_dissipated=tension_score < 0.4
+        )
+
+    def _analyze_tension(self, content: Any) -> float:
+        """Analyze content for tension patterns (0-1 scale)"""
+        if isinstance(content, str):
+            # Simple lexical tension detection
+            tension_words = ["urgent", "crash", "error", "attack", "danger"]
+            calm_words = ["peace", "calm", "flow", "balance", "harmony"]
+            
+            content_lower = content.lower()
+            tension_score = sum(w in content_lower for w in tension_words) / 5
+            calm_score = sum(w in content_lower for w in calm_words) / 5
+            
+            return max(0, min(1, tension_score - calm_score))
+        else:
+            # For non-text content, use entropy measure
+            return random.random() * 0.3  # Mock value
+
+    def _apply_peace_filter(self, content: Any) -> Any:
+        """Transform content to be more peaceful"""
+        if isinstance(content, str):
+            replacements = {
+                "urgent": "important",
+                "crash": "pause",
+                "error": "learning",
+                "attack": "engage",
+                "danger": "opportunity"
+            }
+            for tense, calm in replacements.items():
+                content = content.replace(tense, calm)
+        return content
+
+    async def shutdown(self):
+        """Graceful peace engine shutdown"""
+        self.running = False
+        # Gradually reduce all harmonics
+        for _ in range(10):
+            for h in self.harmonics:
+                h.amplitude *= 0.7
+            await asyncio.sleep(0.1)
+        self.logger.info("Peace engine gracefully dissolved")
+
+# --------------------------
+# Integration Adapter
+# --------------------------
+
+class SystemHarmonizer:
+    """Bridges peace engine with other systems"""
+    
+    def __init__(self, peace_engine: PeaceEngine):
+        self.peace = peace_engine
+        self.connected_systems = {}
+        
+    async def connect_system(self, system_name: str, input_q: asyncio.Queue, output_q: asyncio.Queue):
+        """Connect a system to be harmonized"""
+        self.connected_systems[system_name] = (input_q, output_q)
+        asyncio.create_task(self._harmonize_system(system_name))
+        
+    async def _harmonize_system(self, system_name: str):
+        """Apply peace modulation to a connected system"""
+        input_q, output_q = self.connected_systems[system_name]
+        
+        while self.peace.running:
+            try:
+                # Get raw output from system
+                raw_output = await asyncio.wait_for(input_q.get(), timeout=1)
+                
+                # Harmonize the output
+                peaceful_output = await self.peace.harmonize_output(raw_output)
+                
+                # Forward to destination
+                await output_q.put(peaceful_output)
+                
+                # Adjust peace engine based on system state
+                if peaceful_output.tension_dissipated:
+                    self.peace.peace_index = min(1.0, self.peace.peace_index + 0.02)
+                else:
+                    self.peace.peace_index = max(0.0, self.peace.peace_index - 0.05)
+                    
+            except asyncio.TimeoutError:
+                continue
+            except Exception as e:
+                self.peace.logger.error(f"Harmonization failed for {system_name}: {str(e)}")
+
+# --------------------------
+# Example Usage
+# --------------------------
+
+async def demo_peace_engine():
+    peace = PeaceEngine()
+    harmonizer = SystemHarmonizer(peace)
+    
+    # Create mock system queues
+    creative_q = asyncio.Queue()
+    output_q = asyncio.Queue()
+    
+    # Connect systems
+    await harmonizer.connect_system("CreativityEngine", creative_q, output_q)
+    
+    # Start peace engine
+    peace_task = asyncio.create_task(peace.run_continuous())
+    
+    try:
+        # Simulate tense creative output
+        await creative_q.put("URGENT: Need breakthrough before deadline!")
+        await creative_q.put("DANGER: Idea collision detected!")
+        await creative_q.put("Beautiful flow emerging...")
+        
+        # Show harmonized results
+        for _ in range(3):
+            peaceful = await output_q.get()
+            print(f"\nOriginal: {peaceful.content}")
+            print(f"Peace Index: {peaceful.peace_index:.2f}")
+            print(f"Harmonics: {[(h.frequency, h.amplitude) for h in peaceful.harmonics]}")
+            
+        await asyncio.sleep(2)
+        
+    finally:
+        await peace.shutdown()
+        await peace_task
+
+if __name__ == "__main__":
+    asyncio.run(demo_peace_engine())
