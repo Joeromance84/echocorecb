@@ -1,0 +1,254 @@
+import numpy as np
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+from sentence_transformers import SentenceTransformer
+from sklearn.neighbors import NearestNeighbors
+from typing import List, Dict, Tuple, Optional, Any
+import hashlib
+import json
+from pathlib import Path
+import asyncio
+import logging
+import random
+
+# Logger setup
+logger = logging.getLogger("hybrid_synapse_engine")
+if not logger.hasHandlers():
+    handler = logging.StreamHandler()
+    fmt = logging.Formatter("[%(levelname)s] %(message)s")
+    handler.setFormatter(fmt)
+    logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+
+# --- Temporal RNN Predictor ---
+class TemporalRNNPredictor:
+    def __init__(self, vocab_size=10, embedding_dim=64, rnn_units=128):
+        self.vocab_size = vocab_size
+        self.embedding_dim = embedding_dim
+        self.rnn_units = rnn_units
+        self.vocab_to_int: Dict[str, int] = {}
+        self.int_to_vocab: Dict[int, str] = {}
+        self.window_size = 5
+        self.model: Optional[keras.Model] = None
+        self.build_model()
+
+    def build_model(self):
+        self.model = keras.Sequential([
+            layers.Embedding(self.vocab_size, self.embedding_dim),
+            layers.LSTM(self.rnn_units),
+            layers.Dense(self.vocab_size, activation="softmax")
+        ])
+        self.model.compile(optimizer="adam", loss="categorical_crossentropy", metrics=["accuracy"])
+
+    def train(self, sequences: List[List[str]], epochs=50, batch_size=32):
+        vocab = sorted(set(file for seq in sequences for file in seq))
+        self.vocab_to_int = {file: i for i, file in enumerate(vocab)}
+        self.int_to_vocab = {i: file for i, file in enumerate(vocab)}
+        self.vocab_size = len(vocab)
+        self.build_model()
+
+        X, y = [], []
+        for seq in sequences:
+            for i in range(len(seq) - 1):
+                context = seq[:i+1]
+                target = seq[i+1]
+                if len(context) >= self.window_size:
+                    X.append([self.vocab_to_int[f] for f in context[-self.window_size:]])
+                    y.append(self.vocab_to_int[target])
+
+        if not X:
+            raise ValueError("Insufficient data for training.")
+
+        X = keras.preprocessing.sequence.pad_sequences(X, maxlen=self.window_size, padding="pre")
+        y = np.array(y)
+        y_onehot = keras.utils.to_categorical(y, num_classes=self.vocab_size)
+
+        logger.info("Training Temporal RNN Predictor...")
+        self.model.fit(X, y_onehot, epochs=epochs, batch_size=batch_size, verbose=0)
+        logger.info("Training complete.")
+
+    async def predict_next(self, history: List[str]) -> List[Tuple[str, float]]:
+        if not self.model or not self.vocab_to_int:
+            return []
+        indexed = [self.vocab_to_int.get(f, 0) for f in history]
+        indexed = indexed[-self.window_size:]
+        padded = keras.preprocessing.sequence.pad_sequences([indexed], maxlen=self.window_size, padding="pre")
+        preds = self.model.predict(padded, verbose=0)[0]
+        decoded = [(self.int_to_vocab[i], float(p)) for i, p in enumerate(preds)]
+        return sorted(decoded, key=lambda x: x[1], reverse=True)
+
+# --- Concept Bridge ---
+class ConceptBridge:
+    def __init__(self, model_dir="models/concept"):
+        self.model = SentenceTransformer('all-mpnet-base-v2')
+        self.knn = NearestNeighbors(n_neighbors=5, metric="cosine")
+        self.file_embeddings: Dict[str, Any] = {}
+        self.concept_graph: Dict[str, set] = {}
+        self.model_dir = Path(model_dir)
+        self.model_dir.mkdir(parents=True, exist_ok=True)
+
+    async def add_document(self, file_path: str, content: str):
+        file_id = self._file_id(file_path)
+        embedding = self.model.encode(content)
+        concepts = self._extract_concepts(content)
+        self.file_embeddings[file_id] = {"path": file_path, "embedding": embedding, "concepts": concepts}
+        for c in concepts:
+            self.concept_graph.setdefault(c, set()).add(file_id)
+        self._update_index()
+        logger.info(f"Added document {file_path}")
+
+    def _file_id(self, path: str) -> str:
+        return hashlib.md5(path.encode()).hexdigest()[:16]
+
+    def _extract_concepts(self, text: str) -> List[str]:
+        words = text.lower().split()
+        return list({w for w in words if len(w) > 4 and w.isalpha()})[:5]
+
+    def _update_index(self):
+        if not self.file_embeddings:
+            return
+        embeddings = np.array([v["embedding"] for v in self.file_embeddings.values()])
+        self.knn.fit(embeddings)
+
+    async def find_matches(self, query: str, top_n=5) -> List[Tuple[str, float]]:
+        if not self.file_embeddings:
+            return []
+        query_emb = self.model.encode(query)
+        distances, indices = self.knn.kneighbors([query_emb], top_n)
+        keys = list(self.file_embeddings.keys())
+        return [(self.file_embeddings[keys[i]]["path"], float(1 - dist)) for dist, i in zip(distances[0], indices[0])]
+
+    async def save_state(self):
+        state = {
+            "file_embeddings": {k: {"path": v["path"], "embedding": v["embedding"].tolist(), "concepts": v["concepts"]}
+                                for k, v in self.file_embeddings.items()},
+            "concept_graph": {k: list(v) for k, v in self.concept_graph.items()}
+        }
+        with open(self.model_dir / "state.json", "w") as f:
+            json.dump(state, f)
+        logger.info("Concept Bridge state saved.")
+
+    async def load_state(self):
+        path = self.model_dir / "state.json"
+        if path.exists():
+            with open(path) as f:
+                state = json.load(f)
+            self.file_embeddings = {
+                k: {"path": v["path"], "embedding": np.array(v["embedding"]), "concepts": v["concepts"]}
+                for k, v in state["file_embeddings"].items()
+            }
+            self.concept_graph = {k: set(v) for k, v in state["concept_graph"].items()}
+            self._update_index()
+            logger.info("Concept Bridge state loaded.")
+
+# --- Feedback Loop ---
+class FeedbackLoop:
+    def __init__(self, temporal_weight=0.5, concept_weight=0.5):
+        self.temporal_weight = temporal_weight
+        self.concept_weight = concept_weight
+        self.learning_rate = 0.05
+
+    async def get_weights(self):
+        return {"temporal": self.temporal_weight, "concept": self.concept_weight}
+
+    async def update_weights(self, source: str, reward: float):
+        if source == "temporal":
+            self.temporal_weight += reward * self.learning_rate
+            self.temporal_weight = max(0.1, min(1.0, self.temporal_weight))
+            self.concept_weight = 1.0 - self.temporal_weight
+        elif source == "concept":
+            self.concept_weight += reward * self.learning_rate
+            self.concept_weight = max(0.1, min(1.0, self.concept_weight))
+            self.temporal_weight = 1.0 - self.concept_weight
+        logger.info(f"Weights updated: temporal={self.temporal_weight:.2f}, concept={self.concept_weight:.2f}")
+
+# --- Hybrid Predictor ---
+class HybridPredictor:
+    def __init__(self, temporal: TemporalRNNPredictor, concept: ConceptBridge):
+        self.temporal = temporal
+        self.concept = concept
+        self.feedback = FeedbackLoop()
+
+    async def predict_next(self, current_file: str, history: List[str]) -> List[Tuple[str, float]]:
+        weights = await self.feedback.get_weights()
+        temporal_preds = await self.temporal.predict_next(history)
+        concept_preds = await self.concept.find_matches(current_file)
+
+        combined_scores = {}
+        for path, score in temporal_preds:
+            combined_scores[path] = combined_scores.get(path, 0.0) + score * weights["temporal"]
+        for path, score in concept_preds:
+            combined_scores[path] = combined_scores.get(path, 0.0) + score * weights["concept"]
+
+        total = sum(combined_scores.values())
+        if total > 0:
+            for k in combined_scores:
+                combined_scores[k] /= total
+
+        return sorted(combined_scores.items(), key=lambda x: x[1], reverse=True)
+
+# --- Demo ---
+async def demo():
+    logger.info("Starting Hybrid Synapse Engine Demo")
+
+    temporal = TemporalRNNPredictor()
+    concept = ConceptBridge()
+    hybrid = HybridPredictor(temporal, concept)
+
+    documents = {
+        "quantum_mechanics.txt": "Quantum superposition and entanglement phenomena",
+        "neural_networks.pdf": "Deep learning architectures using transformer models",
+        "bioinformatics.md": "DNA sequence analysis with machine learning",
+        "physics_paper.pdf": "Quantum field theory and particle interactions",
+        "data_analytics.csv": "Statistical analysis of datasets",
+        "deep_learning_research.pdf": "Latest trends in deep learning and AI."
+    }
+
+    sequences = [
+        ["quantum_mechanics.txt", "physics_paper.pdf"],
+        ["neural_networks.pdf", "deep_learning_research.pdf"],
+        ["bioinformatics.md", "data_analytics.csv"],
+        ["quantum_mechanics.txt", "neural_networks.pdf"],
+        ["deep_learning_research.pdf", "data_analytics.csv"]
+    ]
+
+    for path, content in documents.items():
+        await concept.add_document(path, content)
+
+    temporal.train(sequences, epochs=30)
+
+    user_actions = [
+        ("quantum_mechanics.txt", ["quantum_mechanics.txt", "physics_paper.pdf"]),
+        ("neural_networks.pdf", ["neural_networks.pdf", "deep_learning_research.pdf"]),
+        ("physics_paper.pdf", ["quantum_mechanics.txt", "physics_paper.pdf"]),
+        ("bioinformatics.md", ["bioinformatics.md", "data_analytics.csv"]),
+    ]
+
+    for current_file, history in user_actions:
+        logger.info(f"User working on '{current_file}', history: {history}")
+        predictions = await hybrid.predict_next(current_file, history)
+
+        if predictions:
+            logger.info("Top predictions:")
+            for path, prob in predictions[:3]:
+                logger.info(f" - {path} ({prob:.2%})")
+
+        top_pred = predictions[0][0] if predictions else None
+        if top_pred == (history[-1] if history else None):
+            reward = 1.0
+            source = "temporal"
+        elif top_pred == "neural_networks.pdf":
+            reward = 1.0
+            source = "concept"
+        else:
+            reward = -0.5
+            source = random.choice(["temporal", "concept"])
+
+        await hybrid.feedback.update_weights(source, reward)
+
+    await concept.save_state()
+    logger.info("Demo complete. State saved.")
+
+if __name__ == "__main__":
+    asyncio.run(demo())
