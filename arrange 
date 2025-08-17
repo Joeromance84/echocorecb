@@ -1,0 +1,264 @@
+import time
+import json
+import hashlib
+from collections import deque
+from typing import Dict, Any, Callable, Optional, List, Set
+import random
+import uuid
+
+class QuantumTaskState:
+    """Represents a task in superposition of possible states"""
+    def __init__(self, base_task: Dict[str, Any]):
+        self.possible_states = self._generate_possible_states(base_task)
+        self.collapsed_state = None
+        self.probability_field = {k: 1.0/len(self.possible_states) for k in self.possible_states}
+        
+    def _generate_possible_states(self, base_task) -> Dict[str, Dict]:
+        """Generates quantum-style variations of the base task"""
+        variations = {}
+        base_id = base_task['id']
+        
+        # Standard variation
+        variations[f"{base_id}_std"] = {
+            **base_task,
+            "id": f"{base_id}_std",
+            "quantum_weight": 0.6
+        }
+        
+        # Conservative variation
+        variations[f"{base_id}_con"] = {
+            **base_task,
+            "id": f"{base_id}_con",
+            "data": {**base_task['data'], "safe_mode": True},
+            "quantum_weight": 0.3
+        }
+        
+        # Aggressive variation
+        variations[f"{base_id}_agg"] = {
+            **base_task,
+            "id": f"{base_id}_agg",
+            "data": {**base_task['data'], "turbo_mode": True},
+            "quantum_weight": 0.1
+        }
+        
+        return variations
+    
+    def collapse_state(self, engine_knowledge: Dict[str, float]) -> Dict[str, Any]:
+        """Collapses to one state based on engine's learned probabilities"""
+        adjusted_weights = {
+            k: v * engine_knowledge.get(k.split('_')[-1], 1.0)
+            for k, v in self.probability_field.items()
+        }
+        total = sum(adjusted_weights.values())
+        self.collapsed_state = random.choices(
+            list(self.possible_states.keys()),
+            weights=[v/total for v in adjusted_weights.values()]
+        )[0]
+        return self.possible_states[self.collapsed_state]
+
+class MorphicResonanceField:
+    """Shared knowledge across all engine instances"""
+    _shared_knowledge = {
+        'error_patterns': {},
+        'success_patterns': {},
+        'quantum_weights': {'std': 1.0, 'con': 1.0, 'agg': 1.0}
+    }
+    
+    @classmethod
+    def record_error(cls, error_signature: str, task_fingerprint: str):
+        cls._shared_knowledge['error_patterns'].setdefault(error_signature, []).append(task_fingerprint)
+        
+    @classmethod
+    def record_success(cls, success_signature: str, task_fingerprint: str):
+        cls._shared_knowledge['success_patterns'].setdefault(success_signature, []).append(task_fingerprint)
+        
+    @classmethod
+    def adjust_quantum_weights(cls, strategy: str, multiplier: float):
+        cls._shared_knowledge['quantum_weights'][strategy] *= multiplier
+
+class AutopoieticEngine(SelfHealingResonantEngine):
+    """Evolutionary engine with self-modifying architecture"""
+    
+    def __init__(self, name: str, max_concurrent: int = 5, default_retries: int = 1):
+        super().__init__(name, max_concurrent, default_retries)
+        self.quantum_queue = deque()
+        self.holographic_memory = []
+        self.architecture_version = 1
+        self.fingerprints: Set[str] = set()
+        
+    def add_task(self, task_id: str, task_data: Dict[str, Any], task_fn: Callable, retries: Optional[int] = None):
+        # Generate quantum task states
+        base_task = {
+            "id": task_id,
+            "data": task_data,
+            "fn": task_fn,
+            "status": "superposition",
+            "timestamp": time.time(),
+            "retries_left": retries if retries is not None else self.default_retries,
+            "original_id": task_id
+        }
+        
+        qt = QuantumTaskState(base_task)
+        self.quantum_queue.append(qt)
+        print(f"[QUANTUM] Task '{task_id}' exists in superposition of {len(qt.possible_states)} states")
+        
+    def process(self):
+        while self.quantum_queue or self.queue:
+            # First collapse quantum states
+            while self.quantum_queue:
+                qt = self.quantum_queue.popleft()
+                collapsed_task = qt.collapse_state(MorphicResonanceField._shared_knowledge['quantum_weights'])
+                self.queue.append(collapsed_task)
+                print(f"[COLLAPSE] Quantum task '{collapsed_task['original_id']}' collapsed to {collapsed_task['id']}")
+            
+            # Then process classical tasks
+            batch_size = min(len(self.queue), self.max_concurrent)
+            
+            for _ in range(batch_size):
+                task = self.queue.popleft()
+                task_fingerprint = self._create_task_fingerprint(task)
+                
+                if task_fingerprint in self.fingerprints:
+                    print(f"[HOLOGRAM] Recursive task pattern detected - applying morphic resonance")
+                    task = self._apply_resonant_correction(task)
+                
+                try:
+                    result = task["fn"](task["data"])
+                    self._handle_success(task, result)
+                    
+                except Exception as e:
+                    self._handle_failure(task, e)
+                    
+        self._self_optimize()
+        self.status = "idle"
+        
+    def _handle_success(self, task, result):
+        task["status"] = "completed"
+        task["result"] = result
+        self.completed.append(task)
+        
+        # Record success in morphic field
+        success_sig = self._create_success_signature(task)
+        task_fp = self._create_task_fingerprint(task)
+        MorphicResonanceField.record_success(success_sig, task_fp)
+        
+        # Adjust quantum weights toward successful strategy
+        strategy = task['id'].split('_')[-1]
+        MorphicResonanceField.adjust_quantum_weights(strategy, 1.1)
+        
+        print(f"[SUCCESS] Task '{task['id']}' completed. Reinforcing {strategy} strategy.")
+    
+    def _handle_failure(self, task, error):
+        task["status"] = "failed"
+        task["error"] = str(error)
+        self.failure_history.setdefault(task["original_id"], []).append(str(error))
+        
+        # Record error in morphic field
+        error_sig = self._create_error_signature(error)
+        task_fp = self._create_task_fingerprint(task)
+        MorphicResonanceField.record_error(error_sig, task_fp)
+        
+        # Adjust quantum weights away from failed strategy
+        strategy = task['id'].split('_')[-1]
+        MorphicResonanceField.adjust_quantum_weights(strategy, 0.9)
+        
+        if task["retries_left"] > 0:
+            task["retries_left"] -= 1
+            self.queue.append(task)
+            print(f"[RETRY] Task '{task['id']}' failed, requeued ({task['retries_left']} left).")
+        else:
+            self._transmute_failure(task)
+            print(f"[TRANSMUTE] Task '{task['id']}' failed. Generating evolved task.")
+    
+    def _create_task_fingerprint(self, task) -> str:
+        """Creates a unique fingerprint of the task's essential characteristics"""
+        task_data = {
+            'fn_hash': hashlib.md5(task['fn'].__code__.co_code).hexdigest(),
+            'data_sig': hashlib.md5(json.dumps(task['data'], sort_keys=True).encode()).hexdigest()[:16]
+        }
+        return json.dumps(task_data, sort_keys=True)
+    
+    def _create_error_signature(self, error) -> str:
+        """Creates a standardized error signature"""
+        return str(error).split(':')[0].strip()
+    
+    def _create_success_signature(self, task) -> str:
+        """Creates a standardized success signature"""
+        return f"{task['original_id']}:{hashlib.md5(str(task['result']).encode()).hexdigest()[:8]}"
+    
+    def _apply_resonant_correction(self, task) -> Dict[str, Any]:
+        """Applies corrections from collective knowledge"""
+        error_sig = self._create_error_signature(task.get('error', ''))
+        matching_fixes = MorphicResonanceField._shared_knowledge['success_patterns'].get(error_sig, [])
+        
+        if matching_fixes:
+            # Apply the most common successful fix
+            most_common = max(set(matching_fixes), key=matching_fixes.count)
+            fix_data = json.loads(most_common)
+            task['data'] = {**task['data'], **fix_data}
+            task['id'] = f"{task['original_id']}_resonant_{uuid.uuid4().hex[:4]}"
+            print(f"[RESONANCE] Applied morphic correction from collective knowledge")
+        
+        return task
+    
+    def _self_optimize(self):
+        """Self-modifies the engine's architecture based on performance"""
+        success_rate = len(self.completed) / max(1, len(self.completed) + len(self.failed))
+        
+        if success_rate > 0.9 and len(self.completed) > 10:
+            # Increase concurrency when performing well
+            self.max_concurrent = min(self.max_concurrent + 1, 10)
+            self.architecture_version += 0.1
+            print(f"[SELF-OPTIMIZE] Increased concurrency to {self.max_concurrent}")
+        elif success_rate < 0.5:
+            # Reduce concurrency and increase retries when struggling
+            self.max_concurrent = max(self.max_concurrent - 1, 1)
+            self.default_retries += 1
+            self.architecture_version += 0.1
+            print(f"[SELF-OPTIMIZE] Adjusted parameters (concurrency: {self.max_concurrent}, retries: {self.default_retries})")
+
+# --- Enhanced Example Usage ---
+def quantum_resilient_task(data: Dict[str, Any]) -> str:
+    if data.get("safe_mode"):
+        print("Running in protected safe mode")
+        time.sleep(0.1)  # Extra validation time
+    elif data.get("turbo_mode"):
+        print("Running in turbo mode - aggressive optimization")
+        if random.random() < 0.3:  # Simulate turbo mode instability
+            raise RuntimeError("Turbo mode instability detected")
+    
+    if data.get("fail_on_param") and data.get("param_value") == 0:
+        if data.get("prevent_zero", False):
+            data["param_value"] = 0.001  # Auto-correction
+            print("Zero division prevented by resonance correction")
+        else:
+            raise ZeroDivisionError("Division by zero")
+    
+    return f"Processed: {data.get('message', 'No message')} (mode: {data.get('mode', 'standard')})"
+
+if __name__ == "__main__":
+    # Create two engines that will share knowledge through the MorphicResonanceField
+    engine1 = AutopoieticEngine("Quantum_AI_1")
+    engine2 = AutopoieticEngine("Quantum_AI_2")
+    
+    # First engine gets tasks that will establish patterns
+    engine1.add_task("t_data_analysis", {"message": "analyze dataset", "fail_on_param": True, "param_value": 0}, quantum_resilient_task)
+    engine1.add_task("t_image_process", {"message": "process images", "fail_on_param": True, "param_value": 0}, quantum_resilient_task)
+    
+    # Second engine gets similar but not identical tasks
+    engine2.add_task("t_data_clean", {"message": "clean dataset", "fail_on_param": True, "param_value": 0}, quantum_resilient_task)
+    
+    print("\n=== Running First Engine ===")
+    engine1.process()
+    
+    print("\n=== Running Second Engine ===")
+    engine2.process()  # Should benefit from the first engine's experience
+    
+    print("\n=== Final Reports ===")
+    print("Engine 1:", json.dumps(engine1.get_status(), indent=2))
+    print("Engine 2:", json.dumps(engine2.get_status(), indent=2))
+    
+    print("\n=== Morphic Resonance Field ===")
+    print("Shared error patterns:", len(MorphicResonanceField._shared_knowledge['error_patterns']))
+    print("Shared success patterns:", len(MorphicResonanceField._shared_knowledge['success_patterns']))
+    print("Current quantum weights:", MorphicResonanceField._shared_knowledge['quantum_weights'])
