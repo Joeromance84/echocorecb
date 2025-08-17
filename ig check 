@@ -1,0 +1,367 @@
+import asyncio
+import json
+import traceback
+import heapq
+from collections import deque, defaultdict
+from typing import Dict, Any, Callable, Optional, List, Tuple, Awaitable, Set
+from dataclasses import dataclass
+from enum import Enum, auto
+import aiohttp
+from datetime import datetime, timedelta
+
+class GitHubWorkflowStatus(Enum):
+    SUCCESS = "success"
+    FAILURE = "failure"
+    CANCELLED = "cancelled"
+    IN_PROGRESS = "in_progress"
+    QUEUED = "queued"
+    PENDING = "pending"
+
+@dataclass
+class GitHubWorkflowRun:
+    id: int
+    name: str
+    status: GitHubWorkflowStatus
+    conclusion: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+    html_url: str
+    repository: str
+    head_commit: Dict[str, Any]
+
+class GitHubAwareResonantEngine:
+    """
+    GitHub-embedded workflow monitoring engine with:
+    - Real-time workflow status tracking
+    - Failure pattern recognition
+    - Auto-remediation capabilities
+    - GitHub API integration
+    - Notifications and alerts
+    """
+
+    def __init__(
+        self,
+        repo_owner: str,
+        repo_name: str,
+        github_token: str,
+        poll_interval: int = 60,
+        max_concurrent_checks: int = 5,
+    ):
+        self.repo_owner = repo_owner
+        self.repo_name = repo_name
+        self.github_token = github_token
+        self.poll_interval = poll_interval
+        self.max_concurrent_checks = max_concurrent_checks
+
+        # Workflow tracking
+        self.workflow_runs: Dict[int, GitHubWorkflowRun] = {}
+        self.failed_workflows = deque(maxlen=100)
+        self.successful_workflows = deque(maxlen=100)
+        self.pending_workflows = deque(maxlen=50)
+
+        # Failure analysis
+        self.failure_patterns = defaultdict(list)
+        self.consecutive_failures = defaultdict(int)
+        self.last_failure_time = None
+
+        # GitHub API client
+        self.headers = {
+            "Authorization": f"token {self.github_token}",
+            "Accept": "application/vnd.github.v3+json"
+        }
+        self.api_base = f"https://api.github.com/repos/{repo_owner}/{repo_name}"
+
+        # Monitoring state
+        self.is_monitoring = False
+        self.status = "idle"
+        self.last_checked = None
+        self.session = None
+
+    async def start_monitoring(self):
+        """Start continuous workflow monitoring"""
+        self.session = aiohttp.ClientSession()
+        self.is_monitoring = True
+        self.status = "monitoring"
+        print(f"🔍 Starting GitHub workflow monitoring for {self.repo_owner}/{self.repo_name}")
+
+        try:
+            while self.is_monitoring:
+                await self._check_workflows()
+                await asyncio.sleep(self.poll_interval)
+        finally:
+            await self.session.close()
+            self.status = "stopped"
+
+    async def stop_monitoring(self):
+        """Stop the monitoring process"""
+        self.is_monitoring = False
+        print("🛑 Stopping GitHub workflow monitoring")
+
+    async def _check_workflows(self):
+        """Check all recent workflow runs"""
+        try:
+            async with self.session.get(
+                f"{self.api_base}/actions/runs",
+                headers=self.headers
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    await self._process_workflow_runs(data["workflow_runs"])
+                    self.last_checked = datetime.utcnow()
+                else:
+                    print(f"⚠️ Failed to fetch workflows: {response.status}")
+        except Exception as e:
+            print(f"⚠️ Error checking workflows: {str(e)}")
+
+    async def _process_workflow_runs(self, runs: List[Dict[str, Any]]):
+        """Process and analyze workflow runs"""
+        current_time = datetime.utcnow()
+        new_failures = []
+        new_successes = []
+
+        for run_data in runs:
+            run_id = run_data["id"]
+            status = GitHubWorkflowStatus(run_data["status"])
+            conclusion = run_data.get("conclusion")
+
+            # Create workflow run object
+            workflow_run = GitHubWorkflowRun(
+                id=run_id,
+                name=run_data["name"],
+                status=status,
+                conclusion=conclusion,
+                created_at=datetime.strptime(run_data["created_at"], "%Y-%m-%dT%H:%M:%SZ"),
+                updated_at=datetime.strptime(run_data["updated_at"], "%Y-%m-%dT%H:%M:%SZ"),
+                html_url=run_data["html_url"],
+                repository=run_data["repository"]["full_name"],
+                head_commit=run_data["head_commit"]
+            )
+
+            # Track new runs and status changes
+            if run_id not in self.workflow_runs:
+                print(f"📝 New workflow detected: {workflow_run.name} ({status.value})")
+                self.workflow_runs[run_id] = workflow_run
+
+                if status == GitHubWorkflowStatus.FAILURE:
+                    new_failures.append(workflow_run)
+                elif status == GitHubWorkflowStatus.SUCCESS:
+                    new_successes.append(workflow_run)
+            else:
+                # Check for status updates
+                existing_run = self.workflow_runs[run_id]
+                if existing_run.status != status:
+                    print(f"🔄 Workflow status changed: {workflow_run.name} {existing_run.status.value} → {status.value}")
+                    self.workflow_runs[run_id] = workflow_run
+
+                    if status == GitHubWorkflowStatus.FAILURE:
+                        new_failures.append(workflow_run)
+                    elif status == GitHubWorkflowStatus.SUCCESS:
+                        new_successes.append(workflow_run)
+
+            # Track pending workflows
+            if status in [GitHubWorkflowStatus.QUEUED, GitHubWorkflowStatus.IN_PROGRESS, GitHubWorkflowStatus.PENDING]:
+                if workflow_run not in self.pending_workflows:
+                    self.pending_workflows.append(workflow_run)
+
+        # Process new failures
+        for failed_run in new_failures:
+            await self._handle_workflow_failure(failed_run)
+
+        # Process new successes
+        for successful_run in new_successes:
+            await self._handle_workflow_success(successful_run)
+
+        # Clean up old runs (older than 7 days)
+        self._cleanup_old_runs(current_time)
+
+    async def _handle_workflow_failure(self, workflow_run: GitHubWorkflowRun):
+        """Analyze and respond to workflow failures"""
+        self.failed_workflows.append(workflow_run)
+        self.consecutive_failures[workflow_run.name] += 1
+        self.last_failure_time = datetime.utcnow()
+
+        # Analyze failure
+        failure_analysis = await self._analyze_failure(workflow_run)
+        
+        print(f"🔥 Workflow failed: {workflow_run.name} (Run ID: {workflow_run.id})")
+        print(f"   - Conclusion: {workflow_run.conclusion}")
+        print(f"   - Failure pattern: {failure_analysis.get('pattern', 'unknown')}")
+        print(f"   - Consecutive failures: {self.consecutive_failures[workflow_run.name]}")
+
+        # Check if we should attempt auto-remediation
+        if await self._should_attempt_remediation(workflow_run, failure_analysis):
+            await self._attempt_remediation(workflow_run, failure_analysis)
+
+        # Send alert
+        await self._send_failure_alert(workflow_run, failure_analysis)
+
+    async def _handle_workflow_success(self, workflow_run: GitHubWorkflowRun):
+        """Handle successful workflow runs"""
+        self.successful_workflows.append(workflow_run)
+        self.consecutive_failures[workflow_run.name] = 0
+        
+        print(f"🎉 Workflow succeeded: {workflow_run.name} (Run ID: {workflow_run.id})")
+        
+        # Send success notification if previous run failed
+        if self.consecutive_failures.get(workflow_run.name, 0) > 0:
+            await self._send_recovery_notification(workflow_run)
+
+    async def _analyze_failure(self, workflow_run: GitHubWorkflowRun) -> Dict[str, Any]:
+        """Perform deep analysis of workflow failure"""
+        try:
+            # Get the jobs for this workflow run
+            async with self.session.get(
+                f"{self.api_base}/actions/runs/{workflow_run.id}/jobs",
+                headers=self.headers
+            ) as response:
+                if response.status == 200:
+                    jobs_data = await response.json()
+                    failed_jobs = [j for j in jobs_data["jobs"] if j["conclusion"] == "failure"]
+                    
+                    if failed_jobs:
+                        # Analyze first failed job (could extend to analyze all)
+                        job = failed_jobs[0]
+                        steps = job["steps"]
+                        failed_step = next((s for s in steps if s["conclusion"] == "failure"), None)
+                        
+                        if failed_step:
+                            return {
+                                "pattern": self._detect_failure_pattern(failed_step),
+                                "failed_step": failed_step["name"],
+                                "log_url": f"{job['html_url']}#step:{failed_step['number']}:1"
+                            }
+        except Exception as e:
+            print(f"⚠️ Failed to analyze workflow failure: {str(e)}")
+        
+        return {"pattern": "unknown"}
+
+    def _detect_failure_pattern(self, step: Dict[str, Any]) -> str:
+        """Detect common failure patterns from step logs"""
+        # In a real implementation, we would fetch and analyze the log output
+        step_name = step["name"].lower()
+        
+        if "test" in step_name:
+            return "test_failure"
+        elif "build" in step_name:
+            return "build_failure"
+        elif "deploy" in step_name:
+            return "deployment_error"
+        elif "lint" in step_name:
+            return "linting_error"
+        return "unknown_error"
+
+    async def _should_attempt_remediation(self, workflow_run: GitHubWorkflowRun, analysis: Dict[str, Any]) -> bool:
+        """Determine if automatic remediation should be attempted"""
+        # Don't remediate if we've had too many consecutive failures
+        if self.consecutive_failures.get(workflow_run.name, 0) > 3:
+            return False
+            
+        # Only attempt remediation for certain failure patterns
+        acceptable_patterns = ["test_failure", "build_failure"]
+        return analysis.get("pattern") in acceptable_patterns
+
+    async def _attempt_remediation(self, workflow_run: GitHubWorkflowRun, analysis: Dict[str, Any]):
+        """Attempt to automatically fix the workflow"""
+        print(f"🛠️ Attempting remediation for {workflow_run.name} (Pattern: {analysis['pattern']})")
+        
+        try:
+            if analysis["pattern"] == "test_failure":
+                # Example: Rerun failed tests with more logging
+                await self._rerun_workflow_with_params(
+                    workflow_run,
+                    {"env": {"TEST_VERBOSE": "true", "RETRY_COUNT": "3"}}
+                )
+            elif analysis["pattern"] == "build_failure":
+                # Example: Rerun with cache cleared
+                await self._rerun_workflow_with_params(
+                    workflow_run,
+                    {"env": {"CLEAR_CACHE": "true"}}
+                )
+        except Exception as e:
+            print(f"⚠️ Remediation attempt failed: {str(e)}")
+
+    async def _rerun_workflow_with_params(self, workflow_run: GitHubWorkflowRun, params: Dict[str, Any]):
+        """Rerun a workflow with additional parameters"""
+        # In a real implementation, this would use the GitHub API to rerun with params
+        print(f"♻️ Rerunning workflow {workflow_run.name} with params: {params}")
+        # Placeholder for actual API call
+        # await self.session.post(f"{self.api_base}/actions/runs/{workflow_run.id}/rerun", json=params)
+
+    async def _send_failure_alert(self, workflow_run: GitHubWorkflowRun, analysis: Dict[str, Any]):
+        """Send failure notification"""
+        message = (
+            f"🚨 Workflow Failure Alert\n"
+            f"Repository: {workflow_run.repository}\n"
+            f"Workflow: {workflow_run.name}\n"
+            f"Run ID: {workflow_run.id}\n"
+            f"Status: {workflow_run.status.value}\n"
+            f"Conclusion: {workflow_run.conclusion}\n"
+            f"Failed Step: {analysis.get('failed_step', 'unknown')}\n"
+            f"Pattern: {analysis.get('pattern', 'unknown')}\n"
+            f"View: {workflow_run.html_url}"
+        )
+        print(f"\n=== FAILURE NOTIFICATION ===\n{message}\n")
+
+    async def _send_recovery_notification(self, workflow_run: GitHubWorkflowRun):
+        """Send success notification after previous failures"""
+        message = (
+            f"✅ Workflow Recovery\n"
+            f"Repository: {workflow_run.repository}\n"
+            f"Workflow: {workflow_run.name} is now passing after "
+            f"{self.consecutive_failures.get(workflow_run.name, 0)} failures\n"
+            f"Run ID: {workflow_run.id}\n"
+            f"View: {workflow_run.html_url}"
+        )
+        print(f"\n=== RECOVERY NOTIFICATION ===\n{message}\n")
+
+    def _cleanup_old_runs(self, current_time: datetime):
+        """Remove old runs from tracking"""
+        cutoff = current_time - timedelta(days=7)
+        to_remove = [
+            run_id for run_id, run in self.workflow_runs.items()
+            if run.updated_at < cutoff
+        ]
+        for run_id in to_remove:
+            self.workflow_runs.pop(run_id, None)
+
+    def get_status_report(self) -> Dict[str, Any]:
+        """Generate a status report"""
+        return {
+            "status": self.status,
+            "repository": f"{self.repo_owner}/{self.repo_name}",
+            "last_checked": self.last_checked.isoformat() if self.last_checked else None,
+            "total_workflows": len(self.workflow_runs),
+            "pending_workflows": len(self.pending_workflows),
+            "failed_workflows": len(self.failed_workflows),
+            "successful_workflows": len(self.successful_workflows),
+            "last_failure_time": self.last_failure_time.isoformat() if self.last_failure_time else None,
+            "consecutive_failures": dict(self.consecutive_failures)
+        }
+
+# Example usage
+async def main():
+    # Replace with your GitHub token and repo info
+    engine = GitHubAwareResonantEngine(
+        repo_owner="your-org",
+        repo_name="your-repo",
+        github_token="your-github-token",
+        poll_interval=30  # Check every 30 seconds
+    )
+
+    try:
+        # Start monitoring in the background
+        monitor_task = asyncio.create_task(engine.start_monitoring())
+        
+        # Let it run for a while (in a real app, this would run continuously)
+        await asyncio.sleep(300)
+        
+        # Print status report
+        print("\nCurrent Status:")
+        print(json.dumps(engine.get_status_report(), indent=2))
+        
+    finally:
+        await engine.stop_monitoring()
+        await asyncio.sleep(1)  # Give it time to clean up
+
+if __name__ == "__main__":
+    asyncio.run(main())
