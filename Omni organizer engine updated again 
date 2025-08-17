@@ -1,0 +1,171 @@
+import numpy as np
+import networkx as nx
+import torch
+import torch.nn as nn
+from torch_geometric.nn import GATv2Conv
+from qiskit import QuantumCircuit, execute
+from qiskit_aer import AerSimulator
+from torchdiffeq import odeint
+import hashlib
+import time
+import logging
+from typing import Dict
+
+logger = logging.getLogger("OmniEngineUnified")
+if not logger.hasHandlers():
+    h = logging.StreamHandler()
+    h.setFormatter(logging.Formatter("[%(levelname)s] %(asctime)s - %(message)s"))
+    logger.addHandler(h)
+logger.setLevel(logging.INFO)
+
+
+class QuantumSymbolicNode:
+    """Represents a resonant glyph encoded as a normalized quantum state vector."""
+    def __init__(self, node_id: str, content: str, vector: np.ndarray, celestial_alignment: float, temporal_phase: float):
+        self.id = node_id
+        self.content = content
+        self.quantum_state = self._normalize(vector)
+        self.celestial_alignment = celestial_alignment
+        self.temporal_phase = temporal_phase
+        self.entropy = self._calculate_entropy()
+        self.reputation = 1.0
+        self.quantum_signature = hashlib.sha256(f"{node_id}{content}{time.time()}".encode()).hexdigest()
+
+    def _normalize(self, vec):
+        norm = np.linalg.norm(vec)
+        return vec / norm if norm > 0 else vec
+
+    def _calculate_entropy(self):
+        rho = np.outer(self.quantum_state, self.quantum_state.conj())
+        eigvals = np.linalg.eigvalsh(rho)
+        eigvals = np.clip(eigvals, 1e-12, None)
+        return -np.sum(eigvals * np.log(eigvals))
+
+    def update_reputation(self, boost_amount: float):
+        multiplier = 1 + 0.5 * self.celestial_alignment
+        self.reputation = min(100.0, self.reputation + boost_amount * multiplier)
+        logger.info(f"Node {self.id} reputation updated to {self.reputation:.3f}")
+
+
+class QuantumEngine:
+    """Qiskit Aer-based quantum simulation, including entanglement and entropy management."""
+    def __init__(self):
+        self.simulator = AerSimulator(method='statevector')
+        self.nodes: Dict[str, QuantumSymbolicNode] = {}
+        self.entanglement_graph = nx.Graph()
+
+    def add_node(self, node: QuantumSymbolicNode):
+        self.nodes[node.id] = node
+        self.entanglement_graph.add_node(node.id)
+        logger.info(f"Added quantum node {node.id} with entropy {node.entropy:.4f}")
+
+    def entangle(self, id1: str, id2: str) -> float:
+        node1 = self.nodes[id1]
+        node2 = self.nodes[id2]
+        qc = QuantumCircuit(2)
+        qc.initialize(node1.quantum_state.tolist(), 0)
+        qc.initialize(node2.quantum_state.tolist(), 1)
+        qc.h(0)
+        qc.cx(0, 1)
+        result = execute(qc, self.simulator).result()
+        state = result.get_statevector()
+        ent_measure = abs(state[0])
+        self.entanglement_graph.add_edge(id1, id2, weight=ent_measure)
+        logger.info(f"Entangled nodes {id1} & {id2} with measure {ent_measure:.4f}")
+        return ent_measure
+
+
+class DynamicalEngine(nn.Module):
+    """Neural ODE latent space dynamic evolution."""
+    def __init__(self, latent_dim: int = 64):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(latent_dim, latent_dim),
+            nn.Tanh(),
+            nn.Linear(latent_dim, latent_dim)
+        )
+
+    def forward(self, t, x):
+        return self.net(x)
+
+    def evolve(self, initial_state: torch.Tensor, t_span: tuple):
+        traj = odeint(self, initial_state, torch.linspace(*t_span, 50), method='rk4')
+        return traj[-1]
+
+
+class GraphEngine:
+    """Graph Attention Network for propagating and evolving node embeddings."""
+    def __init__(self, node_dim: int = 64):
+        self.gnn = GATv2Conv(node_dim, node_dim, heads=2)
+        self.graph = nx.DiGraph()
+
+    def add_relation(self, src: str, tgt: str, weight: float):
+        self.graph.add_edge(src, tgt, weight=weight)
+
+    def propagate(self, embeddings: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        if not self.graph.edges:
+            return embeddings
+        nodes = list(self.graph.nodes)
+        edge_list = list(self.graph.edges)
+        edge_index = torch.tensor(edge_list).t().contiguous()
+        x = torch.stack([embeddings[n] for n in nodes])
+        updated_x = self.gnn(x, edge_index)
+        return {nodes[i]: updated_x[i] for i in range(len(nodes))}
+
+
+class CelestialResonator:
+    def get_alignment(self):
+        now = time.time() % 86400
+        return abs(np.sin(2 * np.pi * now / 86400))
+
+    def get_phase(self):
+        return (time.time() % (42 * 86400)) / (42 * 86400)
+
+
+class OmniOrganizingEngineV6:
+    def __init__(self):
+        self.quantum = QuantumEngine()
+        self.dynamical = DynamicalEngine()
+        self.graph = GraphEngine()
+        self.celestial = CelestialResonator()
+        self.memory = {}
+
+    def add_knowledge(self, node_id: str, content: str):
+        embedding = np.random.randn(16)  # Replace with real embeddings
+        celestial_align = self.celestial.get_alignment()
+        temporal_phase = self.celestial.get_phase()
+        node = QuantumSymbolicNode(node_id, content, embedding, celestial_align, temporal_phase)
+        self.quantum.add_node(node)
+
+    def entangle_all(self):
+        ids = list(self.quantum.nodes.keys())
+        for i in range(len(ids)):
+            for j in range(i + 1, len(ids)):
+                measure = self.quantum.entangle(ids[i], ids[j])
+                self.graph.add_relation(ids[i], ids[j], measure)
+
+    def evolve(self):
+        init_state = torch.randn(self.dynamical.net[0].in_features)
+        evolved_state = self.dynamical.evolve(init_state, (0, 1))
+        embeddings = {nid: torch.randn(self.dynamical.net.in_features) for nid in self.graph.graph.nodes}
+        updated_embeddings = self.graph.propagate(embeddings)
+        self.memory.update({
+            'quantum_entropy': [n.entropy for n in self.quantum.nodes.values()],
+            'dynamical_state': evolved_state.detach().numpy(),
+            'graph_embeddings': {k: v.detach().numpy() for k, v in updated_embeddings.items()}
+        })
+        logger.info("Engine evolved one step.")
+
+    def run_demo(self):
+        self.add_knowledge("Quantum_Entanglement", "Particles connect nonlocally beyond space and time.")
+        self.add_knowledge("Cosmic_Rhythms", "Celestial bodies influence system phase and flow.")
+        self.add_knowledge("Fractals_In_Nature", "Recursive patterns creating infinite complexity.")
+        self.entangle_all()
+        self.evolve()
+        return self.memory
+
+
+if __name__ == "__main__":
+    engine = OmniOrganizingEngineV6()
+    memory_snapshot = engine.run_demo()
+    print(memory_snapshot)
