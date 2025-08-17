@@ -1,0 +1,273 @@
+import asyncio
+import json
+import traceback
+import heapq
+from collections import deque
+from typing import Dict, Any, Callable, Optional, List, Tuple, Awaitable
+
+
+class SelfHealingResonantEngine:
+    """
+    Async self-healing engine with consensus validation layer.
+    Lifecycle:
+      - Async concurrent task scheduling
+      - Retries with exponential backoff
+      - Transmutation with guard rules
+      - Consensus validation (internal + external + semantic)
+      - Grounds irreconcilable tasks
+    """
+
+    def __init__(
+        self,
+        name: str,
+        max_concurrent: int = 5,
+        default_retries: int = 1,
+        max_transmutes_per_original: int = 2,
+        base_backoff_seconds: float = 0.1,
+        on_transmute: Optional[Callable[[Dict[str, Any], Dict[str, Any]], Awaitable[None]]] = None,
+        history_limit: int = 500,
+        validation_threshold: float = 0.95
+    ):
+        self.name = name
+        self.max_concurrent = max_concurrent
+        self.default_retries = default_retries
+        self.max_transmutes_per_original = max_transmutes_per_original
+        self.base_backoff_seconds = base_backoff_seconds
+        self.on_transmute = on_transmute
+        self.validation_threshold = validation_threshold
+
+        # Priority queue
+        self.queue: List[Tuple[int, int, Dict[str, Any]]] = []
+
+        # Bounded histories
+        self.completed = deque(maxlen=history_limit)
+        self.failed = deque(maxlen=history_limit)
+        self.transmuted = deque(maxlen=history_limit)
+
+        self.status = "idle"
+        self.transmute_counts: Dict[str, int] = {}
+        self._uid_counter = 0
+
+        print(f"[INIT] Consensus-Validated Engine '{self.name}' online.")
+
+    def _next_uid(self) -> int:
+        self._uid_counter += 1
+        return self._uid_counter
+
+    def add_task(
+        self,
+        task_id: str,
+        task_data: Dict[str, Any],
+        task_fn: Callable[[Dict[str, Any]], Awaitable[Any]],
+        retries: Optional[int] = None,
+        priority: int = 0,
+    ):
+        task = {
+            "id": task_id,
+            "data": dict(task_data),
+            "fn": task_fn,
+            "status": "queued",
+            "timestamp": asyncio.get_event_loop().time(),
+            "retries_left": retries if retries is not None else self.default_retries,
+            "original_id": task_id,
+            "transmute_count": 0,
+            "priority": priority,
+        }
+        heapq.heappush(self.queue, (priority, self._next_uid(), task))
+        self.status = "processing"
+        print(f"[QUEUE] '{task_id}' enqueued.")
+
+    def _calc_backoff(self, retries_consumed: int) -> float:
+        return self.base_backoff_seconds * (2 ** retries_consumed)
+
+    async def process(self):
+        sem = asyncio.Semaphore(self.max_concurrent)
+
+        async def worker(task: Dict[str, Any]):
+            async with sem:
+                return await self._execute_task(task)
+
+        while self.queue:
+            batch = [heapq.heappop(self.queue) for _ in range(len(self.queue))]
+            await asyncio.gather(*(worker(task) for _, _, task in batch))
+
+        self.status = "idle"
+        print(f"[DONE] Engine '{self.name}' finished all work.")
+
+    async def _execute_task(self, task: Dict[str, Any]):
+        task["status"] = "in_progress"
+        try:
+            print(f"[RUN] '{task['id']}'...")
+            result = await task["fn"](task["data"])
+            task["status"] = "completed"
+            task["result"] = result
+
+            # 👇 NEW: Consensus validation instead of blind completion
+            await self._validate_task_result(task)
+
+        except Exception as e:
+            tb = traceback.format_exc()
+            task["status"] = "failed"
+            task["error"] = str(e)
+            task["traceback"] = tb
+            orig = task.get("original_id", task["id"])
+            self.transmute_counts.setdefault(orig, 0)
+
+            if task.get("retries_left", 0) > 0:
+                retries_consumed = self.default_retries - task["retries_left"] + 1
+                task["retries_left"] -= 1
+                delay = self._calc_backoff(retries_consumed)
+                print(f"[RETRY] '{task['id']}' failed. Retrying after {delay:.2f}s...")
+                await asyncio.sleep(delay)
+                heapq.heappush(self.queue, (task["priority"], self._next_uid(), task))
+                return
+
+            if self.transmute_counts[orig] < self.max_transmutes_per_original:
+                await self._transmute_failure(task)
+                self.transmute_counts[orig] += 1
+            else:
+                task["resonance"] = "grounded"
+                self.failed.append(task)
+                print(f"[GROUND] '{task['id']}' grounded.")
+
+    # --- Consensus Validation Layer ---
+    async def _mock_github_api_call(self, task_data: Dict[str, Any]) -> str:
+        """Simulates external check (e.g., GitHub status)."""
+        await asyncio.sleep(0.05)
+        return "success" if task_data.get("expected_external_status") == "success" else "failure"
+
+    async def _mock_semantic_analysis(self, task_data: Dict[str, Any]) -> float:
+        """Simulates semantic AI check."""
+        await asyncio.sleep(0.03)
+        return 0.95 if "final_report" in task_data.get("output_keys", []) else 0.10
+
+    async def _validate_task_result(self, task: Dict[str, Any]):
+        """Consensus validation of internal vs external vs semantic success."""
+        internal_result = 1.0 if task["status"] == "completed" else 0.0
+
+        github_status, semantic_score = await asyncio.gather(
+            self._mock_github_api_call(task["data"]),
+            self._mock_semantic_analysis(task["data"])
+        )
+        external_score = 1.0 if github_status == "success" else 0.0
+
+        final_confidence = (internal_result * 0.4) + (external_score * 0.4) + (semantic_score * 0.2)
+        task["confidence_score"] = final_confidence
+        print(f"[VALIDATE] '{task['id']}' consensus confidence: {final_confidence:.2f}")
+
+        if final_confidence < self.validation_threshold:
+            task["error"] = "Consensus failure: internal vs external mismatch."
+            task["status"] = "failed"
+            await self._transmute_failure(task)
+            print(f"[CONSENSUS-TRANSMUTE] '{task['id']}' retriggered due to validation failure.")
+        else:
+            self.completed.append(task)
+            print(f"[FINAL] '{task['id']}' validated as true success.")
+
+    # --- Transmutation Logic (inherited from older core) ---
+    async def _transmute_failure(self, failed_task: Dict[str, Any]):
+        orig_id = failed_task.get("original_id", failed_task["id"])
+        exc = self._get_exception_from_string(failed_task.get("error", ""))
+        analysis = self._analyze_exception(exc, failed_task.get("traceback", ""))
+
+        new_task_id = f"{orig_id}-transmuted-{self._next_uid()}"
+        new_data = dict(failed_task.get("data", {}))
+        new_data["fix_applied"] = analysis.get("fix")
+        new_data["_transmute_meta"] = {
+            "reason": analysis.get("reason"),
+            "prev_error": failed_task.get("error"),
+            "round": self.transmute_counts.get(orig_id, 0) + 1,
+        }
+
+        async def guarded_fn(data):
+            if "nonzero_guard" in analysis.get("policy_flags", []):
+                if data.get("param_value", 0) == 0:
+                    safe = analysis.get("safe_defaults", {}).get("param_value", 1)
+                    data["param_value"] = safe
+                    print(f"[GUARD] {new_task_id} guarded param_value={safe}")
+            if "reparameterize" in analysis.get("policy_flags", []):
+                data.setdefault("tuning", {})
+                data["tuning"]["reparam"] = True
+                print(f"[GUARD] {new_task_id} reparameterized.")
+            return await failed_task["fn"](data)
+
+        new_task = {
+            "id": new_task_id,
+            "data": new_data,
+            "fn": guarded_fn,
+            "status": "transmuted",
+            "timestamp": asyncio.get_event_loop().time(),
+            "original_id": orig_id,
+            "priority": failed_task.get("priority", 0),
+            "retries_left": self.default_retries,
+            "transmute_count": self.transmute_counts.get(orig_id, 0) + 1,
+        }
+
+        heapq.heappush(self.queue, (new_task["priority"], self._next_uid(), new_task))
+        self.transmuted.append(new_task)
+        self.failed.append(failed_task)
+
+        print(f"[TRANSMUTE] '{failed_task['id']}' => '{new_task_id}' (fix={analysis.get('fix')})")
+
+        if self.on_transmute:
+            try:
+                await self.on_transmute(failed_task, new_task)
+            except Exception as cb_e:
+                print(f"[HOOK-ERR] on_transmute failed: {cb_e}")
+
+        await asyncio.sleep(self.base_backoff_seconds)
+
+    def _get_exception_from_string(self, s: str) -> Optional[Exception]:
+        if not s:
+            return None
+        s = s.lower()
+        if "division" in s: return ZeroDivisionError(s)
+        if "runtime" in s: return RuntimeError(s)
+        return Exception(s)
+
+    def _analyze_exception(self, exc: Optional[Exception], tb: str) -> Dict[str, Any]:
+        if exc is None:
+            return {"fix": "general reparam", "reason": "unknown", "policy_flags": ["reparameterize"]}
+        if isinstance(exc, ZeroDivisionError):
+            return {"fix": "nonzero guard", "reason": "division_by_zero", "policy_flags": ["nonzero_guard"], "safe_defaults": {"param_value": 1}}
+        if isinstance(exc, RuntimeError):
+            return {"fix": "adjust runtime params", "reason": "runtime_error", "policy_flags": ["reparameterize"]}
+        return {"fix": "generic adjustment", "reason": "generic", "policy_flags": ["reparameterize"]}
+
+    def get_status(self):
+        return {
+            "engine": self.name,
+            "status": self.status,
+            "queue": len(self.queue),
+            "completed": len(self.completed),
+            "failed": len(self.failed),
+            "transmuted": len(self.transmuted),
+            "last_completed": self.completed[-1]["id"] if self.completed else None,
+        }
+
+
+# --- Example Tasks ---
+async def resilient_task(data: Dict[str, Any]) -> str:
+    if data.get("fail_on_start"):
+        raise RuntimeError("Initial failure")
+    if data.get("fail_on_param") and data.get("param_value") == 0:
+        raise ZeroDivisionError("Division by zero")
+    await asyncio.sleep(data.get("duration", 0.02))
+    return f"Processed: {data.get('message', 'No message')}"
+
+# --- Run Example ---
+async def main():
+    engine = SelfHealingResonantEngine("Consensus_AI_Core", default_retries=1, max_transmutes_per_original=2)
+
+    engine.add_task("t_fail", {"message": "fail start", "fail_on_start": True, "expected_external_status": "failure"}, resilient_task)
+    engine.add_task("t_math", {"message": "ratios", "fail_on_param": True, "param_value": 0, "expected_external_status": "success"}, resilient_task)
+    engine.add_task("t_ok", {"message": "clean logs", "duration": 0.01, "expected_external_status": "success", "output_keys": ["final_report"]}, resilient_task)
+
+    await engine.process()
+
+    print("\n--- Final Report ---")
+    print(json.dumps(engine.get_status(), indent=2))
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
