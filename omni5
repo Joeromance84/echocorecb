@@ -1,0 +1,183 @@
+"""
+Omni-Organizing Engine v4: Quantum–Cosmic Knowledge Cosmos
+Author: Logan Royce Lorentz (refactored / extended)
+Mechanologist Upgrade: Quantum Fidelity, Entropy, Chaos, ODE Dynamics
+"""
+
+import asyncio, logging, time, hashlib
+import numpy as np
+import networkx as nx
+import matplotlib.pyplot as plt
+from dataclasses import dataclass, field
+from typing import Dict, Any
+from sklearn.manifold import SpectralEmbedding
+
+# -------------------------------
+# Logger Setup
+# -------------------------------
+logger = logging.getLogger("O²-v4")
+if not logger.hasHandlers():
+    handler = logging.StreamHandler()
+    fmt = logging.Formatter("[%(levelname)s] %(asctime)s - %(message)s")
+    handler.setFormatter(fmt)
+    logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+
+# -------------------------------
+# Quantum Math Helpers
+# -------------------------------
+def normalize_state(vec: np.ndarray) -> np.ndarray:
+    norm = np.linalg.norm(vec)
+    return vec / norm if norm > 0 else vec
+
+def quantum_fidelity(state_a: np.ndarray, state_b: np.ndarray) -> float:
+    """Quantum fidelity (similarity measure between states)."""
+    return np.abs(np.vdot(state_a, state_b))**2
+
+def entanglement_entropy(state: np.ndarray) -> float:
+    """Von Neumann entropy approximation for pure state."""
+    rho = np.outer(state, np.conjugate(state))
+    eigvals = np.clip(np.linalg.eigvalsh(rho), 0, 1)
+    eigvals = eigvals[eigvals > 1e-12]
+    return float(-np.sum(eigvals * np.log2(eigvals)))
+
+def logistic_map(x, r=3.9):
+    """Chaotic map for cosmic resonance."""
+    return r * x * (1 - x)
+
+# -------------------------------
+# Quantum Knowledge Node
+# -------------------------------
+@dataclass
+class QuantumNode:
+    id: str
+    raw_embedding: np.ndarray
+    state: np.ndarray = field(init=False)
+    reputation: float = 1.0
+    entropy: float = 0.0
+    phase: float = 0.0
+    creation_time: float = field(default_factory=time.time)
+
+    def __post_init__(self):
+        # Embed into 22-dim complex state: first half real, second half imaginary
+        if len(self.raw_embedding) < 22:
+            self.raw_embedding = np.pad(self.raw_embedding, (0,22-len(self.raw_embedding)))
+        self.state = normalize_state(
+            self.raw_embedding[:11] + 1j*self.raw_embedding[11:22]
+        )
+        self.update_entropy()
+
+    def update_entropy(self):
+        self.entropy = entanglement_entropy(self.state)
+
+    def fidelity_with(self, other: "QuantumNode"):
+        return quantum_fidelity(self.state, other.state)
+
+    def reputation_step(self, boost: float, decay: float = 0.01, gamma: float = 0.05):
+        """
+        Reputation evolves via ODE-like dynamics:
+        dR = alpha*boost - decay*R + gamma*entropy
+        """
+        self.reputation += boost - decay*self.reputation + gamma*self.entropy
+        self.reputation = max(0.1, min(100.0, self.reputation))
+
+# -------------------------------
+# Quantum Knowledge Graph
+# -------------------------------
+class QuantumKnowledgeGraph:
+    def __init__(self):
+        self.G = nx.DiGraph()
+        self.nodes: Dict[str, QuantumNode] = {}
+
+    def add_node(self, node: QuantumNode):
+        self.nodes[node.id] = node
+        self.G.add_node(node.id, entropy=node.entropy, reputation=node.reputation)
+        logger.info(f"[Add Node] {node.id} | Entropy={node.entropy:.3f}")
+
+    def entangle(self, id_a: str, id_b: str, threshold: float = 0.8):
+        na, nb = self.nodes[id_a], self.nodes[id_b]
+        sim = na.fidelity_with(nb)
+        if sim >= threshold:
+            weight = sim * (1 + na.entropy + nb.entropy)
+            self.G.add_edge(id_a, id_b, weight=weight)
+            self.G.add_edge(id_b, id_a, weight=weight)
+            logger.info(f"[Entangle] {id_a} <-> {id_b} | F={sim:.3f}")
+            return True
+        return False
+
+    def evolve_reputations(self):
+        for n in self.nodes.values():
+            n.update_entropy()
+            n.reputation_step(boost=0.1*np.random.rand())
+
+    def visualize(self):
+        coords = SpectralEmbedding(n_components=2).fit_transform(
+            np.array([n.state.real for n in self.nodes.values()])
+        )
+        plt.figure(figsize=(8,6))
+        nx.draw(
+            self.G, pos={nid: coords[i] for i,nid in enumerate(self.nodes)},
+            with_labels=True,
+            node_size=[n.reputation*20 for n in self.nodes.values()],
+            node_color=[n.entropy for n in self.nodes.values()],
+            cmap="plasma"
+        )
+        plt.title("Quantum Knowledge Graph (v4)")
+        plt.show()
+
+# -------------------------------
+# Celestial Chaos Resonator
+# -------------------------------
+class CelestialChaosResonator:
+    def __init__(self):
+        self.x = 0.5
+
+    def tick(self):
+        self.x = logistic_map(self.x)
+        daily = np.sin(2*np.pi*(time.time()%86400)/86400)
+        yearly = np.sin(2*np.pi*(time.time()%31556952)/31556952)
+        return 0.5*(daily+yearly) + self.x*0.5
+
+# -------------------------------
+# Omni-Organizing Engine v4
+# -------------------------------
+class OmniOrganizingEngineV4:
+    def __init__(self):
+        self.graph = QuantumKnowledgeGraph()
+        self.resonator = CelestialChaosResonator()
+        logger.info("Omni-Organizing Engine v4 initialized (Quantum-Dynamical Core).")
+
+    def add_knowledge(self, node_id: str, embedding: np.ndarray):
+        node = QuantumNode(node_id, embedding)
+        self.graph.add_node(node)
+        # try entangle with all existing
+        for other_id in self.graph.nodes:
+            if other_id == node_id: continue
+            self.graph.entangle(node_id, other_id)
+
+    async def simulate(self, steps=5):
+        for step in range(steps):
+            align = self.resonator.tick()
+            self.graph.evolve_reputations()
+            logger.info(f"Step {step} | Celestial Alignment={align:.3f}")
+            await asyncio.sleep(0.2)
+        self.graph.visualize()
+
+# -------------------------------
+# Demo
+# -------------------------------
+async def demo():
+    engine = OmniOrganizingEngineV4()
+    # Fake embeddings (in practice use SentenceTransformer or similar to generate these)
+    e1 = np.random.randn(22)
+    e2 = np.random.randn(22)
+    e3 = np.random.randn(22)
+
+    engine.add_knowledge("quantum_entanglement", e1)
+    engine.add_knowledge("cosmic_rhythms", e2)
+    engine.add_knowledge("fractals_in_nature", e3)
+
+    await engine.simulate(steps=10)
+
+if __name__ == "__main__":
+    asyncio.run(demo())
