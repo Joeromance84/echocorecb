@@ -1,0 +1,208 @@
+import numpy as np
+import networkx as nx
+from qiskit import QuantumCircuit, Aer, execute
+from qiskit.quantum_info import Statevector, DensityMatrix, partial_trace
+from torchdiffeq import odeint
+import torch
+import torch.nn as nn
+from torch_geometric.nn import GATv2Conv
+from sklearn.manifold import TSNE
+import matplotlib.pyplot as plt
+from scipy.integrate import solve_ivp
+
+# ==== 1. QUANTUM NODES (DENSITY MATRIX) ====
+class QuantumNode:
+    def __init__(self, id: str, embedding: np.ndarray):
+        self.id = id
+        self.state = self._to_density_matrix(embedding)
+        self.entropy = self._calculate_entropy()
+        self.reputation = 1.0  # Initialized as superposition
+
+    def _to_density_matrix(self, vec: np.ndarray) -> DensityMatrix:
+        """Convert embedding to mixed state via purification."""
+        complex_vec = vec[:len(vec)//2] + 1j * vec[len(vec)//2:]
+        pure_state = Statevector(complex_vec / np.linalg.norm(complex_vec))
+        return DensityMatrix(pure_state)
+
+    def _calculate_entropy(self) -> float:
+        """Von Neumann entropy from density matrix eigenvalues."""
+        eigvals = np.linalg.eigvalsh(self.state.data)
+        return -np.sum(eigvals * np.log(eigvals + 1e-12))
+
+    def entangle_with(self, other: "QuantumNode") -> float:
+        """Apply CNOT gate and return mutual information."""
+        qc = QuantumCircuit(2)
+        qc.initialize(self.state.to_statevector().data, 0)
+        qc.initialize(other.state.to_statevector().data, 1)
+        qc.cx(0, 1)
+        backend = Aer.get_backend('statevector_simulator')
+        result = execute(qc, backend).result()
+        entangled_state = Statevector(result.get_statevector())
+        # Update both nodes as mixed states
+        self.state = DensityMatrix(partial_trace(entangled_state, [1]))
+        other.state = DensityMatrix(partial_trace(entangled_state, [0]))
+        return self.quantum_mutual_info(other)
+
+    def quantum_mutual_info(self, other: "QuantumNode") -> float:
+        """I(A:B) = S(A) + S(B) - S(AB)."""
+        joint_state = DensityMatrix(np.kron(self.state.data, other.state.data))
+        return self.entropy + other.entropy - joint_state.entropy()
+
+# ==== 2. CHAOTIC DYNAMICS (CONTINUOUS INTEGRATION) ====
+class ChaosDriver:
+    def __init__(self):
+        self.state = np.array([0.1, 0.0, 0.0])  # Lorenz initial conditions
+        self.time = 0.0
+    
+    def step(self, dt: float) -> float:
+        def lorenz(t, state, sigma=10, rho=28, beta=8/3):
+            x, y, z = state
+            return [sigma*(y - x), x*(rho - z) - y, x*y - beta*z]
+        sol = solve_ivp(lorenz, [self.time, self.time+dt], self.state, method='RK45')
+        self.state = sol.y[:, -1]
+        self.time += dt
+        return self.state[0]  # x-component drives modulation
+
+# ==== 3. NEURAL ODE (COMPLEX STATE HANDLING) ====
+class NeuralODE(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(dim*2, 128),  # Real+imag concatenated
+            nn.Softplus(),
+            nn.Linear(128, dim*2)
+        )
+    
+    def forward(self, t, x):
+        return self.net(x)
+
+def predict_future_state(state: DensityMatrix, ode_model: NeuralODE, t_span=0.1):
+    """Evolve density matrix via ODE on flattened real/imag components."""
+    data = state.data
+    x0 = torch.cat([torch.tensor(data.real.flatten()), 
+                    torch.tensor(data.imag.flatten())]).float()
+    xT = odeint(ode_model, x0, torch.tensor([0.0, t_span]))[-1]
+    dim = int(np.sqrt(len(xT)//2))
+    new_data = xT[:dim**2].reshape(dim, dim) + 1j*xT[dim**2:].reshape(dim, dim)
+    return DensityMatrix(new_data / np.trace(new_data))
+
+# ==== 4. HYPERBOLIC EMBEDDING (POINCARÉ BALL) ====
+def poincare_ball_project(embeddings: np.ndarray, curvature=1.0):
+    """True hyperbolic projection with curvature scaling."""
+    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+    scale = np.tanh(np.sqrt(curvature) * norms) / (norms + 1e-9)
+    return embeddings * scale
+
+# ==== 5. EMERGENT CONCEPT SYNTHESIZER ====
+class ConceptSynthesizer(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.gnn = GATv2Conv(dim, dim, heads=3)
+        self.quantum_fuser = nn.Linear(dim * 2, dim)
+    
+    def forward(self, x, edge_index):
+        x_gnn = torch.tanh(self.gnn(x, edge_index))
+        x_fused = self.quantum_fuser(torch.cat([x, x_gnn], dim=-1))
+        return x_fused / torch.norm(x_fused, dim=-1, keepdim=True)
+
+# ==== 6. OMNI-ENGINE CORE ====
+class OmniEngine:
+    def __init__(self):
+        self.graph = nx.Graph()
+        self.chaos = ChaosDriver()
+        self.ode = NeuralODE(dim=4)  # For 2x2 density matrices
+        self.synthesizer = ConceptSynthesizer(dim=32)
+        self.time = 0.0
+    
+    def add_node(self, node: QuantumNode):
+        self.graph.add_node(node.id, 
+                          quantum_state=node.state,
+                          entropy=node.entropy,
+                          rep=node.reputation)
+    
+    def evolve_graph(self, steps: int = 1, dt: float = 0.1):
+        """Quantum walk + chaos + emergent synthesis."""
+        for _ in range(steps):
+            # 1. Chaotic modulation factor
+            chaos_factor = 0.5 + 0.5 * np.tanh(self.chaos.step(dt))
+            
+            # 2. Neural ODE evolution of all nodes
+            for node_id in self.graph.nodes:
+                current_state = self.graph.nodes[node_id]["quantum_state"]
+                future_state = predict_future_state(current_state, self.ode, dt)
+                self.graph.nodes[node_id]["quantum_state"] = future_state
+                self.graph.nodes[node_id]["entropy"] = future_state.entropy()
+            
+            # 3. Update reputations (chaos + entropy drive)
+            for node_id in self.graph.nodes:
+                entropy = self.graph.nodes[node_id]["entropy"]
+                rep = self.graph.nodes[node_id]["rep"]
+                self.graph.nodes[node_id]["rep"] = rep + dt * (chaos_factor * entropy - 0.1 * rep)
+            
+            # 4. Synthesize new concepts from high-entanglement regions
+            if self.time % 1.0 < dt:  # Every ~1.0 time units
+                self._synthesize_emergent_concepts()
+            
+            self.time += dt
+    
+    def _synthesize_emergent_concepts(self):
+        """Fuse high-fidelity nodes into new concepts via GNN."""
+        high_fidelity_edges = [
+            (u, v) for u, v, data in self.graph.edges(data=True) 
+            if data.get("weight", 0) > 0.9
+        ]
+        for u, v in high_fidelity_edges:
+            new_embedding = self._fuse_nodes(u, v)
+            new_node = QuantumNode(f"{u}+{v}", new_embedding)
+            self.add_node(new_node)
+            self.graph.add_edge(u, new_node.id, weight=0.95)
+            self.graph.add_edge(v, new_node.id, weight=0.95)
+    
+    def _fuse_nodes(self, id_a: str, id_b: str) -> np.ndarray:
+        """GNN-based fusion of two node embeddings."""
+        edge_index = torch.tensor([[0], [1]], dtype=torch.long)
+        x = torch.stack([
+            torch.tensor(self.graph.nodes[id_a]["quantum_state"].data.flatten().real),
+            torch.tensor(self.graph.nodes[id_b]["quantum_state"].data.flatten().real)
+        ]).float()
+        with torch.no_grad():
+            fused = self.synthesizer(x, edge_index)
+        return fused.numpy()
+
+# ==== 7. VISUALIZATION ====
+def render_quantum_cosmos(engine: OmniEngine):
+    """Hyperbolic projection with node size = reputation."""
+    states = np.array([
+        np.diag(engine.graph.nodes[n]["quantum_state"].data.real) 
+        for n in engine.graph.nodes
+    ])
+    pos = poincare_ball_project(states)
+    nx.draw(
+        engine.graph, 
+        pos=dict(zip(engine.graph.nodes, pos)),
+        node_size=[200 * engine.graph.nodes[n]["rep"] for n in engine.graph.nodes],
+        node_color=[engine.graph.nodes[n]["entropy"] for n in engine.graph.nodes],
+        cmap="viridis",
+        alpha=0.8
+    )
+    plt.title(f"Time = {engine.time:.2f}, Chaos = {engine.chaos.state[0]:.2f}")
+    plt.show()
+
+# ==== RUN THE SIMULATION ====
+if __name__ == "__main__":
+    engine = OmniEngine()
+    
+    # Initialize with 4 quantum nodes
+    for i in range(4):
+        node = QuantumNode(f"N{i}", np.random.randn(32))
+        engine.add_node(node)
+    
+    # Entangle initial nodes
+    engine.graph.add_edge("N0", "N1", weight=0.92)
+    engine.graph.add_edge("N2", "N3", weight=0.88)
+    
+    # Run for 100 steps with visualization
+    for step in range(100):
+        engine.evolve_graph()
+        if step % 5 == 0:
+            render_quantum_cosmos(engine)
