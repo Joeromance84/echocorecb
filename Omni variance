@@ -1,0 +1,145 @@
+import asyncio
+import logging
+from typing import Dict, List, Any
+import numpy as np
+import torch
+
+# --- Foundational Omni-Organizing Engine Core (simplified) ---
+class OmniCoreEngine:
+    def __init__(self):
+        self.nodes = {}  # NodeID -> NodeData
+        self.entanglement_graph = {}  # NodeID pairs -> weight
+
+    def add_node(self, node_id: str, vector: np.ndarray):
+        norm = vector / np.linalg.norm(vector) if np.linalg.norm(vector) > 0 else vector
+        self.nodes[node_id] = {
+            'vector': norm,
+            'entropy': self._calculate_entropy(norm),
+            'reputation': 1.0
+        }
+        logging.info(f"CoreEngine: Added node {node_id}")
+
+    def _calculate_entropy(self, vect):
+        rho = np.outer(vect, vect.conj())
+        eigvals = np.linalg.eigvalsh(rho)
+        eigvals = np.clip(eigvals, 1e-12, None)
+        return -np.sum(eigvals * np.log(eigvals))
+
+    def selective_entangle(self, threshold: float = 0.75):
+        node_ids = list(self.nodes.keys())
+        n = len(node_ids)
+        for i in range(n):
+            for j in range(i + 1, n):
+                a, b = self.nodes[node_ids[i]]['vector'], self.nodes[node_ids[j]]['vector']
+                sim = np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+                if sim >= threshold:
+                    self.entanglement_graph[(node_ids[i], node_ids[j])] = sim
+                    logging.info(f"CoreEngine: Entangled {node_ids[i]} <-> {node_ids[j]} sim={sim:.3f}")
+
+    def get_entanglement_graph(self):
+        return self.entanglement_graph
+
+# --- EngineStep Abstraction Representing a Containerized Processing Step ---
+class EngineStep:
+    def __init__(self, name: str, func, dependencies: List[str] = None):
+        self.name = name
+        self.func = func  # async function accepting shared context
+        self.dependencies = dependencies or []
+        self.result = None
+
+    async def run(self, shared_context: Dict[str, Any]):
+        inputs = {dep: shared_context.get(dep) for dep in self.dependencies}
+        self.result = await self.func(inputs, shared_context)
+        shared_context[self.name] = self.result
+        logging.info(f"Orchestrator: Step {self.name} completed.")
+        return self.result
+
+# --- Orchestrator Layer -- manages dependencies and schedules EngineSteps ---
+class OmniBuildOrchestrator:
+    def __init__(self):
+        self.steps: Dict[str, EngineStep] = {}
+        self.context: Dict[str, Any] = {}
+        self.completed_steps = set()
+
+    def add_step(self, step: EngineStep):
+        self.steps[step.name] = step
+
+    async def run(self):
+        while len(self.completed_steps) < len(self.steps):
+            ready = [s for s in self.steps.values()
+                     if s.name not in self.completed_steps 
+                     and all(dep in self.completed_steps for dep in s.dependencies)]
+            if not ready:
+                logging.warning("Orchestrator: Deadlock or no steps ready.")
+                break
+            await asyncio.gather(*(step.run(self.context) for step in ready))
+            for step in ready:
+                self.completed_steps.add(step.name)
+
+# --- Concrete EngineStep Implementations ---
+
+async def quantum_embedding_step(inputs, context):
+    raw_input = context.get('raw_input_data')
+    core = OmniCoreEngine()
+    # Add nodes from raw input dictionary {id: content_vector}
+    for node_id, vec in raw_input.items():
+        core.add_node(node_id, np.array(vec))
+    core.selective_entangle()
+    ent_graph = core.get_entanglement_graph()
+    return {'core': core, 'entanglement_graph': ent_graph}
+
+async def dynamical_evolution_step(inputs, context):
+    import torch.nn as nn
+    from torchdiffeq import odeint
+
+    class SimpleODE(nn.Module):
+        def __init__(self, dim):
+            super().__init__()
+            self.linear = nn.Linear(dim, dim)
+        def forward(self, t, x):
+            return torch.tanh(self.linear(x))
+
+    ode_model = SimpleODE(dim=64)
+    init_state = torch.randn(64)
+    traj = odeint(ode_model, init_state, torch.linspace(0, 1, 20))
+    return traj[-1].detach().numpy()
+
+async def graph_propagation_step(inputs, context):
+    ent_graph = inputs.get('quantum_embedding_step', {}).get('entanglement_graph', {})
+    # Dummy GNN propagation simulator: produce updated node features (random here)
+    updated_features = {node: np.random.rand(64) for pair in ent_graph.keys() for node in pair}
+    return updated_features
+
+async def result_aggregation_step(inputs, context):
+    return {
+        'entanglement_graph': inputs.get('quantum_embedding_step', {}).get('entanglement_graph'),
+        'dynamical_state': inputs.get('dynamical_evolution_step'),
+        'graph_features': inputs.get('graph_propagation_step')
+    }
+
+# --- Demo pipeline run ---
+async def main():
+    logging.basicConfig(level=logging.INFO)
+    raw_input_data = {
+        "n1": np.random.rand(16).tolist(),
+        "n2": np.random.rand(16).tolist(),
+        "n3": np.random.rand(16).tolist(),
+    }
+
+    orchestrator = OmniBuildOrchestrator()
+    orchestrator.context['raw_input_data'] = raw_input_data
+
+    orchestrator.add_step(EngineStep("quantum_embedding_step", quantum_embedding_step))
+    orchestrator.add_step(EngineStep("dynamical_evolution_step", dynamical_evolution_step, ["quantum_embedding_step"]))
+    orchestrator.add_step(EngineStep("graph_propagation_step", graph_propagation_step, ["quantum_embedding_step"]))
+    orchestrator.add_step(EngineStep("result_aggregation_step", result_aggregation_step, ["graph_propagation_step", "dynamical_evolution_step"]))
+
+    await orchestrator.run()
+
+    final_result = orchestrator.context.get("result_aggregation_step")
+    print("Final Aggregated Result:")
+    print(final_result)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
