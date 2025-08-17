@@ -1,0 +1,242 @@
+import asyncio
+import json
+import traceback
+import heapq
+from collections import deque
+from typing import Dict, Any, Callable, Optional, List, Tuple, Awaitable
+
+
+class SelfHealingResonantEngine:
+    """
+    Asynchronous self-healing engine.
+    - Runs tasks concurrently (asyncio)
+    - Retries with exponential backoff
+    - Transmutes failures into guarded variants
+    - Grounds tasks after budget exhausted
+    - Maintains lineage + bounded history
+    """
+
+    def __init__(
+        self,
+        name: str,
+        max_concurrent: int = 5,
+        default_retries: int = 1,
+        max_transmutes_per_original: int = 2,
+        base_backoff_seconds: float = 0.1,
+        on_transmute: Optional[Callable[[Dict[str, Any], Dict[str, Any]], Awaitable[None]]] = None,
+        history_limit: int = 500,
+    ):
+        self.name = name
+        self.max_concurrent = max_concurrent
+        self.default_retries = default_retries
+        self.max_transmutes_per_original = max_transmutes_per_original
+        self.base_backoff_seconds = base_backoff_seconds
+        self.on_transmute = on_transmute
+
+        # Priority queue: (priority, uid, task_dict)
+        self.queue: List[Tuple[int, int, Dict[str, Any]]] = []
+
+        # Rolling histories
+        self.completed = deque(maxlen=history_limit)
+        self.failed = deque(maxlen=history_limit)
+        self.transmuted = deque(maxlen=history_limit)
+
+        self.status = "idle"
+        self.transmute_counts: Dict[str, int] = {}
+        self._uid_counter = 0
+
+        print(f"[INIT] Async Engine '{self.name}' online.")
+
+    def _next_uid(self) -> int:
+        self._uid_counter += 1
+        return self._uid_counter
+
+    def add_task(
+        self,
+        task_id: str,
+        task_data: Dict[str, Any],
+        task_fn: Callable[[Dict[str, Any]], Awaitable[Any]],
+        retries: Optional[int] = None,
+        priority: int = 0,
+    ):
+        """Add a task into the async priority queue."""
+        task = {
+            "id": task_id,
+            "data": dict(task_data),
+            "fn": task_fn,
+            "status": "queued",
+            "timestamp": asyncio.get_event_loop().time(),
+            "retries_left": retries if retries is not None else self.default_retries,
+            "original_id": task_id,
+            "transmute_count": 0,
+            "priority": priority,
+        }
+        heapq.heappush(self.queue, (priority, self._next_uid(), task))
+        self.status = "processing"
+        print(f"[QUEUE] '{task_id}' enqueued (priority={priority}, retries={task['retries_left']}).")
+
+    def _calc_backoff(self, retries_consumed: int) -> float:
+        return self.base_backoff_seconds * (2 ** retries_consumed)
+
+    async def process(self):
+        """Main async scheduling loop."""
+        sem = asyncio.Semaphore(self.max_concurrent)
+
+        async def worker(task: Dict[str, Any]):
+            async with sem:
+                return await self._execute_task(task)
+
+        while self.queue:
+            # Take everything in queue this tick
+            batch = [heapq.heappop(self.queue) for _ in range(len(self.queue))]
+            tasks = [worker(task) for _, _, task in batch]
+            await asyncio.gather(*tasks)
+
+        self.status = "idle"
+        print(f"[DONE] Engine '{self.name}' finished all work.")
+
+    async def _execute_task(self, task: Dict[str, Any]):
+        """Run a single task, retry or transmute if needed."""
+        task["status"] = "in_progress"
+        try:
+            print(f"[RUN] Task '{task['id']}'...")
+            result = await task["fn"](task["data"])
+            task["status"] = "completed"
+            task["result"] = result
+            self.completed.append(task)
+            print(f"[SUCCESS] '{task['id']}' completed.")
+
+        except Exception as e:
+            tb = traceback.format_exc()
+            task["status"] = "failed"
+            task["error"] = str(e)
+            task["traceback"] = tb
+            orig = task.get("original_id", task["id"])
+            self.transmute_counts.setdefault(orig, 0)
+
+            # Retry if possible
+            if task.get("retries_left", 0) > 0:
+                retries_consumed = self.default_retries - task["retries_left"] + 1
+                task["retries_left"] -= 1
+                delay = self._calc_backoff(retries_consumed)
+                print(f"[RETRY] '{task['id']}' failed ({e}). Retrying after {delay:.2f}s...")
+                await asyncio.sleep(delay)
+                heapq.heappush(self.queue, (task["priority"], self._next_uid(), task))
+                return
+
+            # Transmute if budget remains
+            if self.transmute_counts[orig] < self.max_transmutes_per_original:
+                await self._transmute_failure(task)
+                self.transmute_counts[orig] += 1
+            else:
+                task["resonance"] = "grounded"
+                self.failed.append(task)
+                print(f"[GROUND] '{task['id']}' grounded (max transmutes used).")
+
+    async def _transmute_failure(self, failed_task: Dict[str, Any]):
+        """Turn failure into guarded async task."""
+        orig_id = failed_task.get("original_id", failed_task["id"])
+        exc = self._get_exception_from_string(failed_task.get("error", ""))
+        analysis = self._analyze_exception(exc, failed_task.get("traceback", ""))
+
+        new_task_id = f"{orig_id}-transmuted-{self._next_uid()}"
+        new_data = dict(failed_task.get("data", {}))
+        new_data["fix_applied"] = analysis.get("fix")
+        new_data["_transmute_meta"] = {
+            "reason": analysis.get("reason"),
+            "prev_error": failed_task.get("error"),
+            "round": self.transmute_counts.get(orig_id, 0) + 1,
+        }
+
+        async def guarded_fn(data):
+            # Guards
+            if "nonzero_guard" in analysis.get("policy_flags", []):
+                if data.get("param_value", 0) == 0:
+                    safe = analysis.get("safe_defaults", {}).get("param_value", 1)
+                    data["param_value"] = safe
+                    print(f"[GUARD] {new_task_id} applied nonzero_guard → {safe}")
+            if "reparameterize" in analysis.get("policy_flags", []):
+                data.setdefault("tuning", {})
+                data["tuning"]["reparam"] = True
+                print(f"[GUARD] {new_task_id} applied reparameterize.")
+            return await failed_task["fn"](data)
+
+        new_task = {
+            "id": new_task_id,
+            "data": new_data,
+            "fn": guarded_fn,
+            "status": "transmuted",
+            "timestamp": asyncio.get_event_loop().time(),
+            "original_id": orig_id,
+            "priority": failed_task.get("priority", 0),
+            "retries_left": self.default_retries,
+            "transmute_count": self.transmute_counts.get(orig_id, 0) + 1,
+        }
+
+        heapq.heappush(self.queue, (new_task["priority"], self._next_uid(), new_task))
+        self.transmuted.append(new_task)
+        self.failed.append(failed_task)
+
+        print(f"[TRANSMUTE] '{failed_task['id']}' → '{new_task_id}' (fix={analysis.get('fix')})")
+
+        if self.on_transmute:
+            try:
+                await self.on_transmute(failed_task, new_task)
+            except Exception as cb_e:
+                print(f"[HOOK-ERR] Transmute callback failed: {cb_e}")
+
+        await asyncio.sleep(self.base_backoff_seconds)
+
+    def _get_exception_from_string(self, s: str) -> Optional[Exception]:
+        if not s:
+            return None
+        s = s.lower()
+        if "division" in s: return ZeroDivisionError(s)
+        if "runtime" in s: return RuntimeError(s)
+        return Exception(s)
+
+    def _analyze_exception(self, exc: Optional[Exception], tb: str) -> Dict[str, Any]:
+        if exc is None:
+            return {"fix": "general reparam", "reason": "unknown", "policy_flags": ["reparameterize"]}
+        if isinstance(exc, ZeroDivisionError):
+            return {"fix": "guard denominator nonzero", "reason": "division_by_zero", "policy_flags": ["nonzero_guard"], "safe_defaults": {"param_value": 1}}
+        if isinstance(exc, RuntimeError):
+            return {"fix": "adjust runtime params", "reason": "runtime_error", "policy_flags": ["reparameterize"]}
+        return {"fix": "generic guard", "reason": "generic", "policy_flags": ["reparameterize"]}
+
+    def get_status(self):
+        return {
+            "engine": self.name,
+            "status": self.status,
+            "queue": len(self.queue),
+            "completed": len(self.completed),
+            "failed": len(self.failed),
+            "transmuted": len(self.transmuted),
+            "last_completed": self.completed[-1]["id"] if self.completed else None,
+        }
+
+
+# --- Example async usage ---
+async def resilient_task(data: Dict[str, Any]) -> str:
+    if data.get("fail_on_start"):
+        raise RuntimeError("Initial failure")
+    if data.get("fail_on_param") and data.get("param_value") == 0:
+        raise ZeroDivisionError("Division by zero")
+    await asyncio.sleep(data.get("duration", 0.01))
+    return f"Processed: {data.get('message', 'No message')}"
+
+async def main():
+    engine = SelfHealingResonantEngine("Async_AI_Core", default_retries=1, max_transmutes_per_original=2)
+
+    engine.add_task("t_fail", {"message": "fail early", "fail_on_start": True}, resilient_task)
+    engine.add_task("t_math", {"message": "compute ratios", "fail_on_param": True, "param_value": 0}, resilient_task)
+    engine.add_task("t_ok", {"message": "clean logs", "duration": 0.02}, resilient_task)
+
+    await engine.process()
+
+    print("\n--- Final Report ---")
+    print(json.dumps(engine.get_status(), indent=2))
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
