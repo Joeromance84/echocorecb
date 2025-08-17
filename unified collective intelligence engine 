@@ -1,0 +1,377 @@
+import asyncio
+from enum import Enum
+import networkx as nx
+import numpy as np
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional, Tuple, Any, Deque
+import logging
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+import uuid
+import json
+from pydantic import BaseModel, Field, validator
+from scipy.spatial.distance import euclidean
+from collections import deque
+import hashlib
+
+# ========== CORE TYPES ==========
+class AgentSpecialization(str, Enum):
+    ENERGY = "energy_optimization"
+    MOBILITY = "mobility_systems"
+    MATERIALS = "smart_materials"
+    URBAN = "urban_planning"
+    CRISIS = "crisis_response"
+    SYNTHESIS = "cross_domain_synthesis"
+
+class SolutionVector(BaseModel):
+    performance: float = Field(..., ge=0.0, le=2.0)
+    complexity: float = Field(1.0, ge=0.1, le=5.0)
+    novelty: float = Field(0.5, ge=0.0, le=1.0)
+    compatibility: float = Field(0.7, ge=0.0, le=1.0)
+
+# ========== TRUST & MEMORY ==========
+class TrustNetwork:
+    def __init__(self, persistence_path: str = "trust_network.gpickle"):
+        self.graph = nx.Graph()
+        self.persistence_path = persistence_path
+        self._load()
+        
+    def update(self, agent_a: str, agent_b: str, outcome: "CollaborationOutcome"):
+        edge_data = self.graph.get_edge_data(agent_a, agent_b, default={
+            'success_count': 0,
+            'attempts': 0,
+            'history': deque(maxlen=50),
+            'last_performance': 0.0
+        })
+        
+        edge_data['attempts'] += 1
+        edge_data['history'].append(outcome)
+        edge_data['last_performance'] = outcome.performance_gain
+        
+        if outcome.performance_gain > 0:
+            edge_data['success_count'] += 1
+            
+        self.graph.add_edge(agent_a, agent_b, **edge_data)
+        self._save()
+    
+    def get_trust_score(self, agent_a: str, agent_b: str) -> float:
+        data = self.graph.get_edge_data(agent_a, agent_b)
+        if not data or len(data['history']) == 0:
+            return 0.5
+            
+        recent_weighted = sum(
+            o.performance_gain * (0.5 ** i) 
+            for i, o in enumerate(reversed(data['history']))
+        )
+        return np.clip(recent_weighted / len(data['history']) + 0.5, 0, 1)
+    
+    def _save(self):
+        nx.write_gpickle(self.graph, self.persistence_path)
+        
+    def _load(self):
+        try:
+            self.graph = nx.read_gpickle(self.persistence_path)
+        except (FileNotFoundError, EOFError):
+            self.graph = nx.Graph()
+
+# ========== MURMURATION ENGINE ==========  
+class MurmurationEngine:
+    def __init__(self, trust_network: TrustNetwork):
+        self.trust = trust_network
+        self.wave_patterns = deque(maxlen=100)
+        
+    def compute_swarm_vector(self, agent: "AIAgent", agent_pool: List["AIAgent"], solutions: Dict[str, SolutionVector]) -> Dict[str, float]:
+        current_vec = self._agent_to_vector(agent, solutions[agent.id])
+        neighbors = self._find_swarm_neighbors(agent, agent_pool, solutions)
+        
+        if not neighbors:
+            return {
+                'alignment': 0.0,
+                'cohesion': 0.0,
+                'separation': 0.0,
+                'tradition': 0.0
+            }
+            
+        neighbor_vecs = [self._agent_to_vector(n, solutions[n.id]) for n in neighbors]
+        avg_vec = np.mean(neighbor_vecs, axis=0)
+        
+        # Core murmuration dynamics
+        alignment = np.linalg.norm(avg_vec - current_vec)
+        cohesion = 0.3 * alignment
+        separation = -sum(
+            max(0, 0.5 - np.linalg.norm(current_vec - v)) 
+            for v in neighbor_vecs
+        )
+        
+        # Tradition effect (historical wave patterns)
+        tradition = self._calculate_tradition_effect(agent, neighbors)
+        
+        return {
+            'alignment': float(alignment),
+            'cohesion': float(cohesion),
+            'separation': float(separation),
+            'tradition': float(tradition)
+        }
+    
+    def _find_swarm_neighbors(self, agent: "AIAgent", agent_pool: List["AIAgent"], solutions: Dict[str, SolutionVector]) -> List["AIAgent"]:
+        return sorted(
+            [a for a in agent_pool if a.id != agent.id],
+            key=lambda x: (
+                self.trust.get_trust_score(agent.id, x.id),
+                -euclidean(
+                    self._agent_to_vector(agent, solutions[agent.id]),
+                    self._agent_to_vector(x, solutions[x.id])
+                )
+            ),
+            reverse=True
+        )[:5]
+    
+    def _agent_to_vector(self, agent: "AIAgent", solution: SolutionVector) -> np.ndarray:
+        return np.array([
+            solution.performance,
+            solution.complexity,
+            solution.novelty,
+            solution.compatibility,
+            len(agent.specialization) / 10  # Normalized specialization factor
+        ])
+    
+    def _calculate_tradition_effect(self, agent: "AIAgent", neighbors: List["AIAgent"]) -> float:
+        if not self.wave_patterns:
+            return 0.0
+            
+        recent_pattern = hash(tuple((n.id, n.specialization) for n in neighbors))
+        pattern_counts = sum(1 for p in self.wave_patterns if p == recent_pattern)
+        return min(0.5, pattern_counts / len(self.wave_patterns))
+
+# ========== AI AGENT CORE ==========
+class AIAgent(BaseModel):
+    id: str = Field(default_factory=lambda: f"agent_{uuid.uuid4().hex[:6]}")
+    specialization: AgentSpecialization
+    base_competence: float = Field(0.8, ge=0.1, le=1.0)
+    adaptability: float = Field(0.6, ge=0.0, le=1.0)
+    workload: int = 0
+    max_workload: int = 3
+    swarm_influence: Dict[str, float] = Field(default_factory=dict)
+    
+    class Config:
+        use_enum_values = True
+        arbitrary_types_allowed = True
+        
+    def propose_solution(self, problem: Dict) -> SolutionVector:
+        self._check_workload()
+        self.workload += 1
+        
+        try:
+            # Base solution influenced by specialization
+            base_perf = self.base_competence * np.random.uniform(0.9, 1.1)
+            complexity = problem.get('complexity', 1.0)
+            
+            # Apply swarm adjustments if available
+            if self.swarm_influence:
+                alignment_boost = self.swarm_influence.get('alignment', 0) * 0.2
+                tradition_boost = self.swarm_influence.get('tradition', 0) * 0.3
+                base_perf *= (1 + alignment_boost + tradition_boost)
+                
+            return SolutionVector(
+                performance=float(np.clip(base_perf, 0.1, 2.0)),
+                complexity=float(complexity),
+                novelty=float(np.random.uniform(0.3, 0.7)),
+                compatibility=float(np.random.uniform(0.5, 0.9))
+            )
+        finally:
+            self.workload -= 1
+            
+    async def collaborate(self, partner: "AIAgent", context: Dict) -> "CollaborationOutcome":
+        self._check_workload()
+        partner._check_workload()
+        self.workload += 1
+        partner.workload += 1
+        
+        try:
+            await asyncio.sleep(min(1.0, context.get('complexity', 1.0) / 2))
+            
+            # Dynamic patience calculation
+            trust = self._get_trust(partner)
+            adaptability = (self.adaptability + partner.adaptability) / 2
+            patience = 0.5 + (trust * 0.3) + (adaptability * 0.2)
+            
+            if np.random.random() < patience:
+                perf_gain = np.random.uniform(0.1, 0.5) * adaptability
+                solution = SolutionVector(
+                    performance=1.0 + perf_gain,
+                    complexity=context.get('complexity', 1.0),
+                    novelty=0.8,
+                    compatibility=0.9
+                )
+            else:
+                perf_gain = np.random.uniform(-0.2, 0.1)
+                solution = SolutionVector(
+                    performance=max(0.5, 1.0 + perf_gain),
+                    complexity=context.get('complexity', 1.0),
+                    novelty=0.3,
+                    compatibility=0.6
+                )
+                
+            return CollaborationOutcome(
+                participants=(self.id, partner.id),
+                performance_gain=float(perf_gain),
+                metadata={
+                    "solution": solution.dict(),
+                    "trust_score": trust,
+                    "patience_factor": patience
+                }
+            )
+        finally:
+            self.workload -= 1
+            partner.workload -= 1
+            
+    def _check_workload(self):
+        if self.workload >= self.max_workload:
+            raise RuntimeError(f"Agent {self.id} at capacity")
+            
+    def _get_trust(self, partner: "AIAgent") -> float:
+        # Placeholder - would use actual trust network in implementation
+        return np.clip(np.random.normal(0.6, 0.2), 0, 1)
+
+# ========== UNIFIED ENGINE ==========
+class UCIEngine:
+    def __init__(self, agent_count: int = 8):
+        self.agents = self._initialize_agents(agent_count)
+        self.trust_network = TrustNetwork()
+        self.murmuration = MurmurationEngine(self.trust_network)
+        self.executor = ThreadPoolExecutor(max_workers=12)
+        self.logger = logging.getLogger("UCIEngine")
+        self.metrics = {
+            "solutions_generated": 0,
+            "collaborations": 0,
+            "performance_history": deque(maxlen=1000)
+        }
+        
+    def _initialize_agents(self, count: int) -> List[AIAgent]:
+        specializations = list(AgentSpecialization)
+        return [
+            AIAgent(
+                specialization=specializations[i % len(specializations)],
+                base_competence=np.random.uniform(0.7, 0.95),
+                adaptability=np.random.uniform(0.4, 0.9)
+            )
+            for i in range(count)
+        ]
+        
+    async def solve(self, problem: Dict) -> Dict:
+        """End-to-end problem solving with murmuration dynamics"""
+        self.logger.info(f"Solving: {problem.get('description')}")
+        
+        # Phase 1: Individual proposals
+        solutions = await self._gather_solutions(problem)
+        
+        # Phase 2: Apply swarm intelligence
+        for agent in self.agents:
+            agent.swarm_influence = self.murmuration.compute_swarm_vector(
+                agent, self.agents, solutions
+            )
+        
+        # Phase 3: Strategic collaborations
+        collaborations = await self._orchestrate_collaborations(problem)
+        
+        # Phase 4: Final synthesis
+        return self._synthesize_results(solutions, collaborations)
+        
+    async def _gather_solutions(self, problem: Dict) -> Dict[str, SolutionVector]:
+        futures = {
+            agent.id: asyncio.get_event_loop().run_in_executor(
+                self.executor,
+                agent.propose_solution,
+                problem
+            )
+            for agent in self.agents
+        }
+        return {aid: await fut for aid, fut in futures.items()}
+        
+    async def _orchestrate_collaborations(self, problem: Dict) -> Dict[str, Any]:
+        candidate_pairs = self._select_collaboration_pairs()
+        tasks = [
+            agent1.collaborate(agent2, problem)
+            for agent1, agent2 in candidate_pairs
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        outcomes = {}
+        for (a1, a2), result in zip(candidate_pairs, results):
+            if isinstance(result, Exception):
+                self.logger.error(f"Collaboration failed: {result}")
+                continue
+                
+            collab_id = f"{a1.id}-{a2.id}"
+            outcomes[collab_id] = result
+            self.trust_network.update(a1.id, a2.id, result)
+            self.metrics["collaborations"] += 1
+            self.metrics["performance_history"].append(result.performance_gain)
+            
+        return outcomes
+        
+    def _select_collaboration_pairs(self) -> List[Tuple[AIAgent, AIAgent]]:
+        """Strategic pairing based on trust and swarm dynamics"""
+        return [
+            (self.agents[i], self.agents[j])
+            for i in range(len(self.agents))
+            for j in range(i+1, min(i+3, len(self.agents)))
+            if np.random.random() < 0.7  # Simulated strategic selection
+        ]
+        
+    def _synthesize_results(self, solutions: Dict[str, SolutionVector], collaborations: Dict[str, Any]) -> Dict:
+        all_solutions = {
+            **{f"ind_{aid}": sol.dict() for aid, sol in solutions.items()},
+            **{f"collab_{cid}": res.metadata["solution"] for cid, res in collaborations.items()}
+        }
+        
+        best_id, best_solution = max(
+            all_solutions.items(),
+            key=lambda item: item[1]["performance"]
+        )
+        
+        return {
+            "best_solution": best_solution,
+            "all_solutions": all_solutions,
+            "metrics": {
+                "average_performance": np.mean([s["performance"] for s in all_solutions.values()]),
+                "collaboration_success_rate": sum(
+                    1 for c in collaborations.values() 
+                    if c.performance_gain > 0
+                ) / max(1, len(collaborations)),
+                "system_cohesion": self._calculate_cohesion()
+            }
+        }
+        
+    def _calculate_cohesion(self) -> float:
+        """Measure of how well the swarm is aligned"""
+        if not self.agents:
+            return 0.0
+        return np.mean([
+            a.swarm_influence.get('alignment', 0) 
+            for a in self.agents
+        ])
+
+# ========== EXAMPLE USAGE ==========
+async def main():
+    logging.basicConfig(level=logging.INFO)
+    engine = UCIEngine(agent_count=8)
+    
+    problem = {
+        "description": "Design zero-carbon urban district",
+        "complexity": 1.8,
+        "constraints": {
+            "energy": "renewable_only",
+            "transport": "pedestrian_first",
+            "materials": "circular_economy"
+        }
+    }
+    
+    result = await engine.solve(problem)
+    print(f"Best solution performance: {result['best_solution']['performance']:.2f}")
+    
+    with open("ucie_solution.json", "w") as f:
+        json.dump(result, f, indent=2)
+
+if __name__ == "__main__":
+    asyncio.run(main())
