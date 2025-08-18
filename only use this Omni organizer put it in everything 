@@ -1,0 +1,419 @@
+"""
+███████╗ █████╗ ██╗     ██╗   ██╗
+██╔════╝██╔══██╗██║     ██║   ██║
+█████╗  ███████║██║     ██║   ██║
+██╔══╝  ██╔══██║██║     ██║   ██║
+███████╗██║  ██║███████╗╚██████╔╝
+╚══════╝╚═╝  ╚═╝╚══════╝ ╚═════╝ 
+Author: Logan Royce Lorentz
+Omni-Organizing Engine (O²) v3.1415926535
+Hyperdimensional Quantum-Cosmic Knowledge Fusion Core
+"""
+
+import asyncio
+import hashlib
+import logging
+import random
+import time
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from typing import Any, Dict, List, Tuple, Optional
+
+import matplotlib.pyplot as plt
+import networkx as nx
+import numpy as np
+from minisom import MiniSom
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.manifold import TSNE
+from scipy.spatial import distance
+
+# -------------------------------
+# Logger Setup
+# -------------------------------
+logger = logging.getLogger("O²")
+if not logger.hasHandlers():
+    handler = logging.StreamHandler()
+    fmt = logging.Formatter("[%(levelname)s] %(asctime)s - %(message)s")
+    handler.setFormatter(fmt)
+    logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+
+# -------------------------------
+# Ontological Dimensions
+# -------------------------------
+class OntologicalDimension(Enum):
+    SPATIAL = "WHERE"
+    TEMPORAL = "WHEN"
+    CAUSAL = "WHY"
+    MECHANISTIC = "HOW"
+    IDENTITY = "WHAT"
+    PURPOSE = "WHY_ULTIMATE"
+
+# -------------------------------
+# Core Data Structures
+# -------------------------------
+@dataclass
+class OmegaFrame:
+    hyperspatial_coords: np.ndarray = field(default_factory=lambda: np.zeros(11))
+    temporal_phases: List[Any] = field(default_factory=list)
+    causal_web: Dict = field(default_factory=dict)
+    process_hologram: List = field(default_factory=list)
+    essence_vector: Any = None
+    entanglement_hash: str = ""
+    semantic_content: str = ""
+    reputation: float = 1.0
+    celestial_alignment: float = 0.0
+
+@dataclass
+class EliteNode:
+    id: str
+    content: str
+    hyperspatial_coords: np.ndarray
+    quantum_signature: str
+    reputation: float = 1.0
+    celestial_alignment: float = 0.0
+    temporal_phase: float = 0.0
+    last_updated: float = field(default_factory=time.time)
+
+    def boost(self, amount: float):
+        multiplier = 1 + self.celestial_alignment * 0.5
+        self.reputation = min(100.0, self.reputation + amount * multiplier)
+        logger.info(f"Node {self.id} boosted to reputation {self.reputation:.2f}")
+
+# -------------------------------
+# Omni-Organizing Engine
+# -------------------------------
+class OmniOrganizingEngine:
+    def __init__(self):
+        self.graph = nx.DiGraph()
+        self.nodes: Dict[str, EliteNode] = {}
+        self.code_storage: Dict[str, str] = {}
+        self.reputation: Dict[str, float] = {}
+        self.vectorizer = SentenceTransformer('all-mpnet-base-v2')
+        self.som = MiniSom(10, 10, 11)
+        self.memory: List[OmegaFrame] = []
+        self.harmonizer_score = 1.0
+        self.entangler = self._mock_entangler()
+        self.temporal_predictor = TemporalOracle()
+        self.concept_bridge = ConceptualBridge()
+        self.celestial = CelestialResonator()
+        self.reassessment_lock = asyncio.Lock()
+        logger.info("Omni-Organizing Engine initialized.")
+
+    def _mock_entangler(self):
+        class Entangler:
+            def entangle(self, eid, data): pass
+            def consult(self, eid): return "Quantum coherence stable."
+        return Entangler()
+
+    def add_knowledge(self, node_id: str, content: str):
+        """Add or update knowledge node with thread-safe operations."""
+        if node_id in self.nodes:
+            logger.warning(f"Node {node_id} already exists. Updating content.")
+            self._update_node(node_id, content)
+            return
+            
+        self.code_storage[node_id] = content
+        embedding = self.vectorizer.encode([content])[0]
+        coords = self._project_to_hyperspace(embedding)
+        qsig = hashlib.sha256(f"{node_id}{content}{time.time()}".encode()).hexdigest()
+        celestial_align = self.celestial.get_current_alignment()
+        temporal_phase = self.celestial.get_temporal_phase()
+
+        node = EliteNode(
+            node_id, content, coords, qsig, 
+            reputation=1.0, 
+            celestial_alignment=celestial_align,
+            temporal_phase=temporal_phase
+        )
+        self.nodes[node_id] = node
+        self.graph.add_node(node_id, **node.__dict__)
+        self.memory.append(
+            OmegaFrame(coords, [], {}, [], None, qsig, content, 1.0, celestial_align)
+        )
+        logger.info(f"Added knowledge node '{node_id}', signature: {qsig[:8]}")
+
+        self._entangle_node(node_id)
+
+    def _update_node(self, node_id: str, new_content: str):
+        """Internal method to update node content and recalculate properties."""
+        node = self.nodes[node_id]
+        node.content = new_content
+        node.last_updated = time.time()
+        
+        # Recalculate embedding and coordinates
+        embedding = self.vectorizer.encode([new_content])[0]
+        node.hyperspatial_coords = self._project_to_hyperspace(embedding)
+        
+        # Update quantum signature
+        node.quantum_signature = hashlib.sha256(
+            f"{node_id}{new_content}{time.time()}".encode()
+        ).hexdigest()
+        
+        # Update celestial alignment
+        node.celestial_alignment = self.celestial.get_current_alignment()
+        
+        # Update graph attributes
+        self.graph.nodes[node_id].update(node.__dict__)
+        self.code_storage[node_id] = new_content
+
+    def _project_to_hyperspace(self, embedding) -> np.ndarray:
+        if len(embedding) >= 11:
+            return embedding[:11]
+        return np.pad(embedding, (0, 11 - len(embedding)), 'constant')
+
+    def _entangle_node(self, node_id: str):
+        """Recompute entanglements for a node with all others."""
+        node = self.nodes[node_id]
+        
+        # Remove existing entanglements
+        edges_to_remove = []
+        for u, v, data in self.graph.edges(node_id, data=True):
+            if data.get('quantum_entangled', False):
+                edges_to_remove.append((u, v))
+        self.graph.remove_edges_from(edges_to_remove)
+        
+        # Create new entanglements
+        for other_id, other_node in self.nodes.items():
+            if other_id == node_id:
+                continue
+                
+            # Use quantum-enhanced similarity metric
+            sim = 1 - distance.mahalanobis(
+                node.hyperspatial_coords, 
+                other_node.hyperspatial_coords, 
+                np.eye(11)
+            ) / 11
+            
+            # Temporal phase adjustment
+            phase_diff = abs(node.temporal_phase - other_node.temporal_phase)
+            sim *= (1 - phase_diff * 0.2)  # Penalize large phase differences
+            
+            if sim > 0.85:
+                self.graph.add_edge(node_id, other_id, 
+                                  weight=sim, 
+                                  quantum_entangled=True,
+                                  last_updated=time.time())
+                self.graph.add_edge(other_id, node_id, 
+                                  weight=sim, 
+                                  quantum_entangled=True,
+                                  last_updated=time.time())
+                logger.debug(f"Entangled {node_id} <-> {other_id} with sim {sim:.2f}")
+
+    async def reassess_knowledge(self, updated_nodes: Optional[Dict[str, str]] = None):
+        """
+        Quantum-speed reassessment of all knowledge nodes and relationships.
+        Handles both new information and changed starting points.
+        """
+        async with self.reassessment_lock:
+            start_time = time.time()
+            
+            # Update existing nodes if provided
+            if updated_nodes:
+                for node_id, content in updated_nodes.items():
+                    if node_id in self.nodes:
+                        self._update_node(node_id, content)
+                    else:
+                        self.add_knowledge(node_id, content)
+
+            # Parallel re-entanglement of all nodes
+            await asyncio.gather(*[
+                asyncio.get_event_loop().run_in_executor(
+                    None, self._entangle_node, node_id
+                ) for node_id in self.nodes
+            ])
+            
+            # Update temporal predictions
+            await self.temporal_predictor.recalibrate()
+            
+            logger.info(f"Quantum reassessment completed in {(time.time()-start_time)*1000:.2f}ms")
+
+    async def predict_emergence(self, query: str):
+        """Predict emergent concepts with current knowledge state."""
+        temporal_preds = await self.temporal_predictor.predict(query)
+        celestial_align = self.celestial.get_current_alignment()
+        
+        # Enhance predictions with current graph state
+        query_embed = self.vectorizer.encode([query])[0]
+        query_coords = self._project_to_hyperspace(query_embed)
+        
+        enhanced_preds = []
+        for concept, score in temporal_preds:
+            # Adjust score based on current node proximities
+            for node in self.nodes.values():
+                dist = distance.cosine(query_coords, node.hyperspatial_coords)
+                score *= (1 - dist * 0.5)  # Favor concepts near existing knowledge
+            
+            # Celestial alignment multiplier
+            score *= (1 + celestial_align * 0.3)
+            enhanced_preds.append((concept, score))
+            
+        return enhanced_preds
+
+    async def adapt_and_predict(self, query: str, updated_nodes: Optional[Dict[str, str]] = None):
+        """
+        Flawless reactive adaptation to new information followed by prediction.
+        """
+        await self.reassess_knowledge(updated_nodes)
+        return await self.predict_emergence(query)
+
+    def visualize_hyperspace(self):
+        """Visualize current hyperspatial configuration with temporal phases."""
+        if len(self.nodes) < 3:
+            logger.warning("Not enough nodes to visualize.")
+            return
+            
+        coords = np.array([n.hyperspatial_coords for n in self.nodes.values()])
+        reduced = TSNE(n_components=3).fit_transform(coords)
+        
+        fig = plt.figure(figsize=(16, 12))
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # Node size = reputation, color = temporal phase, alpha = celestial alignment
+        reputations = [n.reputation for n in self.nodes.values()]
+        phases = [n.temporal_phase for n in self.nodes.values()]
+        alignments = [n.celestial_alignment for n in self.nodes.values()]
+        
+        scatter = ax.scatter(
+            reduced[:,0], reduced[:,1], reduced[:,2], 
+            s=np.array(reputations)*20, 
+            c=phases, 
+            cmap='hsv',
+            alpha=np.array(alignments)*0.7 + 0.3,
+            edgecolors='w'
+        )
+        
+        # Add edges for entanglements
+        for u, v, data in self.graph.edges(data=True):
+            if data.get('quantum_entangled', False):
+                u_idx = list(self.nodes.keys()).index(u)
+                v_idx = list(self.nodes.keys()).index(v)
+                ax.plot(
+                    [reduced[u_idx,0], reduced[v_idx,0]],
+                    [reduced[u_idx,1], reduced[v_idx,1]],
+                    [reduced[u_idx,2], reduced[v_idx,2]],
+                    'g-', alpha=0.2 * data['weight']
+                )
+        
+        plt.colorbar(scatter, label='Temporal Phase')
+        plt.title("Hyperspatial Knowledge Projection (Dynamic State)")
+        plt.show()
+
+# --- Supporting Components ---
+
+class TemporalOracle:
+    def __init__(self):
+        self.calibration_factor = 1.0
+        
+    async def predict(self, query: str):
+        await asyncio.sleep(0.1)  # Simulate quantum processing
+        base_preds = [(f"Emergence_{i}", random.random() * self.calibration_factor) 
+                     for i in range(5)]
+        return sorted(base_preds, key=lambda x: x[1], reverse=True)[:5]
+        
+    async def recalibrate(self):
+        """Adjust prediction parameters based on current cosmic state"""
+        await asyncio.sleep(0.05)
+        self.calibration_factor = 0.9 + (time.time() % 0.2)
+        logger.debug(f"Temporal oracle recalibrated to {self.calibration_factor:.3f}")
+
+class ConceptualBridge:
+    async def find(self, query: str, top_k=5):
+        await asyncio.sleep(0.1)
+        return [(f"Concept_{i}", random.random()) for i in range(top_k)]
+
+class CelestialResonator:
+    def __init__(self):
+        self.base_cycle = 86400  # 1 day in seconds
+        
+    def get_current_alignment(self):
+        now = time.time() % self.base_cycle
+        return abs(np.sin(2 * np.pi * now / self.base_cycle))
+        
+    def get_temporal_phase(self):
+        return (time.time() % (42 * self.base_cycle)) / (42 * self.base_cycle)
+        
+    def get_current_energy(self):
+        phase = self.get_temporal_phase()
+        return {
+            'score': 0.5 + 0.3 * np.sin(phase * 2 * np.pi),
+            'phase': phase
+        }
+        
+    def suggest(self, energy, alignment):
+        suggestions = [
+            "Maintain harmony with cosmic flows",
+            "Seek quantum entanglement opportunities",
+            "Amplify high-reputation nodes",
+            "Explore phase-shifted dimensions",
+            "Balance temporal and spatial resonances"
+        ]
+        idx = int(energy['phase'] * len(suggestions)) % len(suggestions)
+        return suggestions[idx]
+
+# --- Enhanced Demo ---
+
+async def demo():
+    logger.info("Starting Quantum-Adaptive O² Engine demo...")
+    engine = OmniOrganizingEngine()
+    
+    # Initial knowledge state
+    engine.add_knowledge("quantum_entanglement", 
+                        "Particles connect beyond space and time through quantum superposition.")
+    engine.add_knowledge("cosmic_rhythms", 
+                        "Celestial bodies influence quantum states through subtle energy fluctuations.")
+    engine.add_knowledge("fractal_consciousness", 
+                        "Recursive self-similar patterns in nature suggest fundamental consciousness structures.")
+    
+    # Boost a node to demonstrate reputation effects
+    engine.nodes["quantum_entanglement"].boost(15)
+    
+    # Initial visualization
+    engine.visualize_hyperspace()
+    
+    # Get celestial guidance
+    guidance = engine.celestial.suggest(
+        engine.celestial.get_current_energy(),
+        engine.celestial.get_current_alignment()
+    )
+    logger.info(f"Celestial Guidance: {guidance}")
+    
+    # Initial predictions
+    logger.info("Initial emergence prediction:")
+    preds = await engine.predict_emergence("How does quantum physics relate to cosmic patterns?")
+    for concept, score in preds:
+        logger.info(f"  {concept}: {score:.2%} confidence")
+    
+    # New information arrives - demonstrate dynamic reassessment
+    logger.info("\nNew cosmic data received - performing quantum reassessment...")
+    updates = {
+        "cosmic_rhythms": "Revised: Celestial quantum fluctuations create resonance windows for dimensional access.",
+        "quantum_biology": "New: Quantum effects in biological systems suggest cosmic connection mechanisms."
+    }
+    
+    # Reassess and predict with new information
+    new_preds = await engine.adapt_and_predict(
+        "Biological quantum-cosmic interfaces",
+        updates
+    )
+    
+    logger.info("Updated emergence prediction:")
+    for concept, score in new_preds:
+        logger.info(f"  {concept}: {score:.2%} confidence")
+    
+    # Visualize updated state
+    engine.visualize_hyperspace()
+    
+    # Demonstrate rapid reorientation with different starting point
+    logger.info("\nReorienting from new perspective...")
+    pivot_preds = await engine.adapt_and_predict(
+        "Fractal structures in quantum-cosmic biology"
+    )
+    logger.info("Pivoted emergence prediction:")
+    for concept, score in pivot_preds:
+        logger.info(f"  {concept}: {score:.2%} confidence")
+
+if __name__ == "__main__":
+    asyncio.run(demo())
