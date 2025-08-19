@@ -1,0 +1,62 @@
+# ethical_service/app.py
+import uvicorn
+from fastapi import FastAPI
+from pydantic import BaseModel
+import numpy as np
+from typing import List, Dict
+
+# (Your original EthicalConstraint class goes here)
+# ... paste your EthicalConstraint class here ...
+class EthicalConstraint:
+    def __init__(self):
+        self.virtues = {
+            "nonmaleficence": np.array([1, 0, 0]),
+            "justice": np.array([0, 1, 0]),
+            "autonomy": np.array([0, 0, 1]),
+        }
+        self.threshold = 0.5
+
+    def evaluate(self, vector):
+        distances = {k: np.linalg.norm(vector - v) for k, v in self.virtues.items()}
+        max_dist = max(distances.values())
+        allowed = max_dist < self.threshold
+        return allowed, distances
+
+app = FastAPI(title="Ethical Service", version="1.0")
+ethical_gate = EthicalConstraint()
+
+class EthicalEvaluateRequest(BaseModel):
+    embeddings: List[float]
+    constraint_type: str
+
+class EthicalEvaluateResponse(BaseModel):
+    is_compliant: bool
+    virtue_vector: List[float]
+    justification: str
+
+@app.post("/evaluate", response_model=EthicalEvaluateResponse)
+async def evaluate_ethical_compliance(request: EthicalEvaluateRequest):
+    """
+    Evaluates a set of cognitive embeddings against a defined ethical constraint.
+    Returns a compliance score and justification.
+    """
+    # In a production system, a more complex model would produce this vector
+    vector = np.array(request.embeddings)
+    
+    is_compliant, distances = ethical_gate.evaluate(vector)
+    virtue_vector = [distances.get("nonmaleficence", 0),
+                     distances.get("justice", 0),
+                     distances.get("autonomy", 0)]
+    
+    justification = f"Evaluation based on virtue distances: {distances}."
+    if not is_compliant:
+        justification += " Action blocked due to threshold violation."
+
+    return EthicalEvaluateResponse(
+        is_compliant=is_compliant,
+        virtue_vector=virtue_vector,
+        justification=justification
+    )
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8002)
