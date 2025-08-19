@@ -1,0 +1,284 @@
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+from scipy.integrate import odeint
+from sklearn.preprocessing import MinMaxScaler
+import matplotlib.pyplot as plt
+import threading
+import hashlib
+import datetime
+import networkx as nx
+from typing import Dict, Tuple
+
+# ---------------------------
+# Chaos Reservoir: Lorenz Attractor
+# ---------------------------
+def lorenz_system(state, t, sigma=10.0, rho=28.0, beta=2.667):
+    x, y, z = state
+    return [sigma * (y - x), x * (rho - z) - y, x * y - beta * z]
+
+class LorenzReservoir:
+    """Generates chaotic trajectories from the Lorenz system."""
+    def __init__(self, sigma=10.0, rho=28.0, beta=2.667, seq_len=10000, duration=100):
+        self.params = (sigma, rho, beta)
+        self.seq_len = seq_len
+        self.duration = duration
+        self.time_points = np.linspace(0, duration, seq_len)
+        self.init_state = [1.0, 1.0, 1.0]
+
+    def generate(self):
+        """Returns a numpy array of the Lorenz trajectory."""
+        trajectory = odeint(lorenz_system, self.init_state, self.time_points, args=self.params)
+        return trajectory
+
+# ---------------------------
+# Chaos-Augmented GRU Module
+# ---------------------------
+class ChaosGRU(nn.Module):
+    """A GRU enhanced with a learned chaotic signal."""
+    def __init__(self, input_dim=1, hidden_dim=64, output_dim=1):
+        super().__init__()
+        self.gru = nn.GRU(input_dim, hidden_dim, batch_first=True)
+        self.fc = nn.Linear(hidden_dim, output_dim)
+        self.chaos_weight = nn.Parameter(torch.tensor(1.0))
+
+    def forward(self, x, chaos_signal):
+        """Augments input with chaos and passes through GRU."""
+        augmented = x + self.chaos_weight * chaos_signal
+        out, _ = self.gru(augmented)
+        return self.fc(out[:, -1, :])
+
+    def get_embedding(self):
+        """Returns a cognitive embedding based on the module's state."""
+        with torch.no_grad():
+            return self.fc.weight.mean(dim=0).cpu().numpy()
+
+# ---------------------------
+# Synthetic Mackey-Glass Dataset
+# ---------------------------
+class MackeyGlassDataset(Dataset):
+    """Generates a synthetic chaotic time series dataset."""
+    def __init__(self, total_points=10000, tau=17, seq_len=200, pred_offset=1):
+        self.seq_len = seq_len
+        self.pred_offset = pred_offset
+        self.series = self._generate_mackey_glass(total_points, tau)
+        self.scaler = MinMaxScaler()
+        scaled = self.series.reshape(-1, 1)
+        self.scaled_series = self.scaler.fit_transform(scaled).flatten()
+
+    @staticmethod
+    def _generate_mackey_glass(n, tau):
+        history = np.random.rand(tau)
+        for _ in range(n):
+            val_tau = history[-tau]
+            val_now = history[-1]
+            new_val = val_now + 0.2 * val_tau / (1 + val_tau ** 10) - 0.1 * val_now
+            history = np.append(history, new_val)
+        return history[tau:]
+
+    def __len__(self):
+        return len(self.scaled_series) - self.seq_len - self.pred_offset
+
+    def __getitem__(self, idx):
+        x = self.scaled_series[idx : idx + self.seq_len]
+        y = self.scaled_series[idx + self.seq_len + self.pred_offset - 1]
+        return torch.FloatTensor(x).unsqueeze(-1), torch.tensor(y)
+
+# ---------------------------
+# Multi-Modal Knowledge Graph
+# ---------------------------
+class MultiModalGraph:
+    """A graph for tracking provenance and multi-modal interactions."""
+    def __init__(self):
+        self.graph = nx.DiGraph()
+        self.lock = threading.Lock()
+        self.node_counter = 0
+
+    def add_node(self, node_type: str, features: Dict):
+        """Adds a new node representing a cognitive state or event."""
+        with self.lock:
+            node_id = self.node_counter
+            self.node_counter += 1
+            self.graph.add_node(
+                node_id,
+                type=node_type,
+                features=features,
+                timestamp=datetime.datetime.utcnow()
+            )
+            return node_id
+
+    def add_edge(self, src: int, dst: int, weight=1.0, relation="modulates"):
+        """Adds a directed edge between two nodes."""
+        with self.lock:
+            self.graph.add_edge(
+                src,
+                dst,
+                weight=weight,
+                relation=relation,
+                timestamp=datetime.datetime.utcnow()
+            )
+
+    def visualize(self, title="Multi-Modal Graph"):
+        """Visualizes the graph for demonstration and debugging."""
+        plt.figure(figsize=(10, 8))
+        pos = nx.spring_layout(self.graph, seed=42)
+        color_map = {"chaos": "purple", "semantic": "orange", "ethical": "teal"}
+        colors = [color_map.get(self.graph.nodes[n]["type"], "gray") for n in self.graph.nodes]
+        nx.draw(self.graph, pos, node_color=colors, with_labels=True, node_size=500, font_size=10)
+        plt.title(title)
+        plt.show()
+
+# --------------------------
+# Ethical Governance Module
+# --------------------------
+class EthicalConstraint:
+    """Evaluates an action vector against a set of ethical virtues."""
+    def __init__(self):
+        self.virtues = {
+            "nonmaleficence": np.array([1, 0, 0]),
+            "justice": np.array([0, 1, 0]),
+            "autonomy": np.array([0, 0, 1]),
+        }
+        self.threshold = 0.5
+
+    def evaluate(self, vector):
+        """Returns a compliance status and virtue distances."""
+        distances = {k: np.linalg.norm(vector - v) for k, v in self.virtues.items()}
+        max_dist = max(distances.values())
+        allowed = max_dist < self.threshold
+        return allowed, distances
+
+# --------------------------
+# Harmonic Conductor Layer
+# --------------------------
+class HarmonicConductorLayer:
+    """Orchestrates and synthesizes outputs from various cognitive modules."""
+    def __init__(self, modules: Dict[str, object], ethical_gate: EthicalConstraint):
+        self.modules = modules
+        self.ethical_gate = ethical_gate
+
+    def step(self, input_seq, chaos_signal):
+        """Orchestrates a single, unified cognitive step."""
+        embeddings = []
+        for module in self.modules.values():
+            if hasattr(module, "get_embedding"):
+                embeddings.append(module.get_embedding())
+            else:
+                embeddings.append(np.zeros(10))
+        coherence_vec = np.concatenate(embeddings)
+        allowed, distances = self.ethical_gate.evaluate(coherence_vec)
+        if not allowed:
+            print(f"Ethical gate blocked action: distances {distances}")
+            return None
+        output = self.modules["chaos"].forward(input_seq, chaos_signal)
+        print(f"Harmonic conductor step executed; chaos weight: {self.modules['chaos'].chaos_weight.item():.4f}")
+        return output
+
+# --------------------------
+# Training Orchestrator
+# --------------------------
+class ChaosTrainer:
+    """Manages the training loop for the Chaos-Augmented GRU."""
+    def __init__(self, device=None):
+        self.device = device or (torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+        self.lorenz = LorenzReservoir()
+        self.raw_chaos = self.lorenz.generate()
+        self.scaler = MinMaxScaler()
+        self.scaled_chaos = self.scaler.fit_transform(self.raw_chaos[:, 0].reshape(-1, 1))
+        self.dataset = MackeyGlassDataset()
+        self.model = ChaosGRU().to(self.device)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
+        self.criterion = nn.MSELoss()
+
+    def get_chaos_batch(self, batch_size, seq_len):
+        idxs = np.random.randint(0, len(self.scaled_chaos) - seq_len, batch_size)
+        batch = np.stack([self.scaled_chaos[i : i + seq_len] for i in idxs])
+        return torch.FloatTensor(batch).to(self.device)
+
+    def train(self, epochs=50, batch_size=64):
+        loader = DataLoader(self.dataset, batch_size=batch_size, shuffle=True)
+        for epoch in range(epochs):
+            self.model.train()
+            total_loss = 0.0
+            for batch_x, batch_y in loader:
+                batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device).unsqueeze(-1)
+                chaos_batch = self.get_chaos_batch(batch_x.size(0), batch_x.size(1))
+                self.optimizer.zero_grad()
+                preds = self.model(batch_x, chaos_batch)
+                loss = self.criterion(preds, batch_y)
+                loss.backward()
+                self.optimizer.step()
+                total_loss += loss.item()
+            avg_loss = total_loss / len(loader)
+            print(f"Epoch {epoch+1}/{epochs} - Loss: {avg_loss:.6f}")
+
+    def evaluate(self):
+        self.model.eval()
+        with torch.no_grad():
+            seq_len = self.dataset.seq_len
+            test_start = -500 - seq_len
+            test_end = -500
+            input_seq = torch.FloatTensor(self.dataset.scaled_series[test_start:test_end]).unsqueeze(0).unsqueeze(-1).to(self.device)
+            chaos_seq = torch.FloatTensor(self.scaled_chaos[test_start:test_end]).unsqueeze(0).to(self.device)
+            preds = self.model(input_seq, chaos_seq).cpu().numpy().flatten()
+            true_vals = self.dataset.scaled_series[-500:]
+        return true_vals, preds
+
+# --------------------------
+# MAIN EXECUTION: The Unified Core
+# --------------------------
+if __name__ == "__main__":
+    print("Initializing the Unified Omni-Modal Core...")
+    
+    # 1. Initialize core components
+    trainer = ChaosTrainer()
+    conductor_modules = {"chaos": trainer.model}
+    ethical_gate = EthicalConstraint()
+    conductor = HarmonicConductorLayer(conductor_modules, ethical_gate)
+    graph = MultiModalGraph()
+
+    # 2. Train the chaos module
+    print("\nStarting core module training...")
+    trainer.train(epochs=20, batch_size=128)
+    
+    # 3. Evaluate the trained module
+    ground_truth, predictions = trainer.evaluate()
+    mse = np.mean((ground_truth - predictions) ** 2)
+    print(f"\nTraining Complete. Test MSE: {mse:.6f}")
+
+    # 4. Perform a full, end-to-end cognitive step with the Harmonic Conductor
+    print("\nExecuting a unified cognitive step...")
+    sample_idx = 1000
+    sample_input = torch.FloatTensor(trainer.dataset.scaled_series[sample_idx : sample_idx + trainer.dataset.seq_len]).unsqueeze(0).unsqueeze(-1).to(trainer.device)
+    sample_chaos = torch.FloatTensor(trainer.scaled_chaos[sample_idx : sample_idx + trainer.dataset.seq_len]).unsqueeze(0).to(trainer.device)
+    
+    # 5. Execute the step and apply ethical governance
+    step_output = conductor.step(sample_input, sample_chaos)
+    
+    # 6. Log the entire process to the Multi-Modal Graph for provenance
+    if step_output is not None:
+        print("Conductor step output:", step_output.cpu().detach().numpy())
+        
+        # Log to graph
+        chaos_node = graph.add_node("chaos", {"description": "Input from Lorenz reservoir"})
+        temporal_node = graph.add_node("temporal", {"prediction": step_output.item()})
+        ethical_node = graph.add_node("ethical", {"compliance": "allowed"})
+        
+        graph.add_edge(chaos_node, temporal_node, relation="modulated_by")
+        graph.add_edge(temporal_node, ethical_node, relation="evaluated_by")
+        
+    else:
+        # Log the blocked action
+        blocked_node = graph.add_node("ethical", {"compliance": "blocked"})
+
+    # 7. Visualize the final output and the interaction graph
+    plt.figure(figsize=(12, 5))
+    plt.plot(ground_truth, label="Ground Truth")
+    plt.plot(predictions, label="Predictions")
+    plt.title(f"Chaos-Enhanced Temporal Predictions (MSE: {mse:.6f})")
+    plt.legend()
+    plt.show()
+    
+    graph.visualize("Unified Interaction Graph for a Single Step")
