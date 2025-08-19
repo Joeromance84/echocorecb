@@ -1,0 +1,225 @@
+"""
+Unified Omni-Modal Cognitive Core
+Integrated chaotic, quantum, ethical, and motivational modules
+Author: Logan Royce
+"""
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+from scipy.integrate import odeint
+from sklearn.preprocessing import MinMaxScaler
+import matplotlib.pyplot as plt
+import threading
+import hashlib
+import datetime
+import networkx as nx
+from typing import Dict, List, Optional, Tuple
+import random
+import math
+from qiskit import QuantumCircuit, Aer, execute
+from qiskit.algorithms.optimizers import SPSA
+from sklearn.metrics.pairwise import cosine_similarity
+from enum import Enum, auto
+from dataclasses import dataclass, field
+
+# Chaotic Dynamical Systems (Lorenz)
+def lorenz_system(state, t, sigma=10.0, rho=28.0, beta=2.667):
+    x, y, z = state
+    dx = sigma*(y - x)
+    dy = x*(rho - z) - y
+    dz = x*y - beta*z
+    return [dx, dy, dz]
+
+class LorenzReservoir:
+    def __init__(self, sigma=10.0,rho=28.0,beta=2.667, seq_len=10000, duration=100):
+        self.params = (sigma, rho, beta)
+        self.seq_len = seq_len
+        self.duration = duration
+        self.time_points = np.linspace(0, duration, seq_len)
+        self.init_state = [1,1,1]
+    def generate(self):
+        return odeint(lorenz_system, self.init_state, self.time_points, args=self.params)
+
+# Quantum Semantic Encoder
+class QuantumEncoder:
+    def __init__(self, n_qubits=4):
+        self.n_qubits = n_qubits
+        self.backend = Aer.get_backend('aer_simulator')
+    def encode(self, concept:str):
+        qc = QuantumCircuit(self.n_qubits)
+        ph = hash(concept)%360
+        for i in range(self.n_qubits):
+            qc.rx(np.radians(ph/(i+1)),i)
+        return qc
+    def similarity(self, qc1:QuantumCircuit, qc2:QuantumCircuit):
+        combined = qc1.compose(qc2.inverse())
+        combined.measure_all()
+        job = execute(combined, backend=self.backend, shots=1024)
+        counts = job.result().get_counts()
+        return counts.get('0'*self.n_qubits,0)/1024
+
+# Vectorial Semantic Memory
+class VectorMemoryBank:
+    def __init__(self):
+        self.embeddings:Dict[str,np.ndarray] = {}
+        self.domain_index:Dict[str,List[str]] = {}
+    def add(self, concept:str, domain:str, vector:np.ndarray):
+        self.embeddings[concept] = vector
+        self.domain_index.setdefault(domain,[]).append(concept)
+    def neighbors(self, concept:str, n=3, diversity=0.5):
+        if concept not in self.embeddings:
+            return []
+        target = self.embeddings[concept]
+        sims = {}
+        for c,v in self.embeddings.items():
+            if c==concept:
+                continue
+            sim = cosine_similarity([target],[v])[0]
+            sims[c] = sim*(1-diversity) + random.random()*diversity
+        return sorted(sims, key=sims.get, reverse=True)[:n]
+
+# Fracture Types and Events
+class FractureType(Enum):
+    LOGIC = auto()
+    ETHICS = auto()
+    COG_DISS = auto()
+    DIM_CONFLICT = auto()
+
+@dataclass
+class FractureEvent:
+    fracture_type:FractureType
+    description:str
+    intensity:float
+    source_concepts:List[str]
+    domain:str
+    quantum_state:Optional[QuantumCircuit]=None
+    propagation_history:List[float] = field(default_factory=list)
+    def propagate(self):
+        if self.quantum_state is None:
+            self.quantum_state = QuantumCircuit(2)
+            self.quantum_state.h(0)
+        self.quantum_state.cx(0,1)
+        self.quantum_state.measure_all()
+        result = execute(self.quantum_state, Aer.get_backend('aer_simulator'), shots=1).result()
+        counts = result.get_counts()
+        if '11' in counts:
+            self.intensity = min(1.0, self.intensity*1.5)
+        self.propagation_history.append(self.intensity)
+
+# Adaptive Cognitive Control
+class AdaptiveController:
+    def __init__(self, base_flex=0.3):
+        self.base_flex = base_flex
+        self.current_flex = base_flex
+        self.history = []
+    def update(self, recent_perf):
+        delta = (0.5 - recent_perf)*0.1
+        self.current_flex = np.clip(self.base_flex+delta,0,1)
+        self.history.append(self.current_flex)
+        return self.current_flex
+    def shift_goals(self):
+        return random.random() < self.current_flex
+
+# Quantum-Enhanced Insight Generator
+class QuantumInsightGenerator:
+    def __init__(self, memory:VectorMemoryBank):
+        self.memory = memory
+        self.encoder = QuantumEncoder(self.memory.embeddings.get(next(iter(self.memory.embeddings)), np.zeros(4)).shape[0] if self.memory.embeddings else 4)
+    def generate(self, concept:str, domain:str):
+        neighbors = self.memory.neighbors(concept,5,0.7)
+        base_qc = self.encoder.encode(concept)
+        for nb in neighbors[:2]:
+            base_qc.compose(self.encoder.encode(nb), inplace=True)
+        base_qc.h(range(base_qc.num_qubits))
+        base_qc.measure_all()
+        counts = execute(base_qc, Aer.get_backend('aer_simulator'), shots=1).result().get_counts()
+        bits = list(counts)[0]
+        return [neighbors[i%len(neighbors)] for i,b in enumerate(bits) if b=='1']
+
+# Metacognition & Self-Regulation
+class MetacognitiveMonitor:
+    def __init__(self):
+        self.history = []
+        self.fracture_counts = {}
+        self.optimal_ranges = {'flex':(0.2,0.7), 'dop':(0.4,0.8)}
+    def analyze(self, flex:float, dop:float, fractures:List[FractureEvent]):
+        for f in fractures:
+            self.fracture_counts[f.fracture_type] = self.fracture_counts.get(f.fracture_type,0)+1
+        adjustments = {}
+        if flex < self.optimal_ranges['flex'][0]: adjustments['flex'] = 0.1
+        if flex > self.optimal_ranges['flex'][1]: adjustments['flex'] = -0.1
+        if dop < self.optimal_ranges['dop']: adjustments['dop'] = 0.15
+        if dop > self.optimal_ranges['dop'][1]: adjustments['dop'] = -0.15
+        mode = 'consolidation'
+        total_fractures = sum(e.intensity for e in fractures)
+        if total_fractures > 1.5:
+            mode = 'crisis'
+        elif dop > 0.7:
+            mode = 'exploration'
+        adjustments['mode'] = mode
+        self.history.append(adjustments)
+        return adjustments
+
+# Integrative Cognitive System
+class AtlasAdvanced:
+    def __init__(self, domains:List[str]):
+        self.memory = VectorMemoryBank()
+        self.controller = AdaptiveController()
+        self.insight_gen = QuantumInsightGenerator(self.memory)
+        self.metacog = MetacognitiveMonitor()
+        self.domains = domains
+        self.fractures:List[FractureEvent] = []
+        self.flex = 0.3
+        self.dopamine = 0.5
+        self.mode = 'exploration'
+        self._init_memory()
+    def _init_memory(self):
+        base = {
+            'physics':['energy','entropy','quantum'],
+            'philosophy':['ethics','logic','ontology'],
+            'math':['topology','infinity','symmetry']}
+        for d, cs in base.items():
+            for c in cs:
+                v = np.random.rand(4)
+                self.memory.add(c,d,v)
+    def process_idea(self,concept:str, domain:str):
+        comp = self.encoder_encode_and_analyze(concept, domain)
+        insights = []
+        if self.mode == 'exploration': insights = self.insight_gen.generate(concept, domain)
+        fractures = self.detect_fractures(concept, domain)
+        if fractures: self.adapt(fractures)
+        self.self_regulate()
+        return {'comprehension':comp,'insights':insights,'fractures':fractures,'mode':self.mode}
+    def encoder_encode_and_analyze(self, concept:str, domain:str):
+        return self.memory.neighbors(concept,3)
+    def detect_fractures(self, concept:str, domain:str):
+        events = []
+        if 'paradox' in concept: 
+            events.append(FractureEvent(FractureType.COG_DISS, f"Paradox in {concept}", 0.6, [concept], domain))
+        self.fractures.extend(events)
+        return events
+    def adapt(self, events:List[FractureEvent]):
+        intensity = sum(e.intensity for e in events)
+        if intensity > 1:
+            self.flex += 0.1
+        self.dopamine = min(1, self.dopamine + 0.2*intensity)
+    def self_regulate(self):
+        adj = self.metacog.analyze(self.flex, self.dopamine, self.fractures[-5:])
+        self.flex = np.clip(self.flex + adj.get('flex',0), 0,1)
+        self.dopamine = np.clip(self.dopamine + adj.get('dop',0), 0,1)
+        self.mode = adj.get('mode',self.mode)
+
+# === Demo ===
+if __name__=="__main__":
+    atlas = AtlasAdvanced(['physics','philosophy','math'])
+    concepts = [('quantum entanglement','physics'),
+                ('ethical paradox','philosophy'),
+                ('infinity','math'),
+                ('logical paradox','philosophy')]
+    for c,d in concepts:
+        out = atlas.process_idea(c,d)
+        print(f"Concept: {c}, Mode: {out['mode']}, Insights: {out['insights']}, Fractures: {[f.description for f in out['fractures']]}")
+
