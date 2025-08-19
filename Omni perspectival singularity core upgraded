@@ -1,0 +1,393 @@
+"""
+Unified Omni-Perspectival Singularity Core (Enhanced Refactor)
+- Advanced Synthesis of Multi-Domain Cognition, Governance & Control
+- Incorporates Quantum, Chaotic, Semantic, Ethical Modules
+- Designed for Scalability, Robustness & Future-Proofing
+"""
+
+import numpy as np
+import torch
+from torch import nn
+import networkx as nx
+import matplotlib.pyplot as plt
+import threading
+import hashlib
+import datetime
+from scipy.integrate import odeint
+from transformers import AutoModel, AutoTokenizer
+
+# Constants and Global Settings
+MAX_PERSPECTIVES = 13  # Optimized prime dimensionality for orthogonal embeddings
+TIMESTAMP = datetime.datetime.utcnow().isoformat()
+
+
+# --- Core Dynamical Systems ---
+
+def lorenz_system(state, t, sigma=10.0, beta=8/3, rho=28.0):
+    """
+    Defines the Lorenz attractor system, modeling chaotic dynamics.
+    """
+    x, y, z = state
+    return [
+        sigma * (y - x),
+        x * (rho - z) - y,
+        x * y - beta * z
+    ]
+
+
+class ChaoticReservoir:
+    """
+    Continuous chaotic reservoir generator and controller.
+    Employs Lorenz system dynamics to simulate edge-of-chaos behavior.
+    """
+    def __init__(self, series_length=10000, t_end=100):
+        self.series_length = series_length
+        self.t = np.linspace(0, t_end, series_length)
+        self.default_state = [1.0, 1.0, 1.0]
+
+    def generate_trajectory(self, params=(10.0, 28.0, 8/3), initial_state=None):
+        if initial_state is None:
+            initial_state = self.default_state
+        trajectory = odeint(lorenz_system, initial_state, self.t, args=params)
+        return trajectory
+
+
+# --- Quantum-Enhanced Perception Module ---
+
+try:
+    import qutip as qt
+except ImportError:
+    qt = None  # Placeholder for quantum ops
+
+class QuantumPerspective:
+    """
+    Handles superposition and entanglement simulation in perceptual embeddings.
+    """
+    def __init__(self, n_qubits=7):
+        self.n_qubits = n_qubits
+        self.entanglement_registry = {}
+
+    def create_superposition(self, states):
+        if qt is None:
+            # Quantum simulation unavailable, fallback to classical approximation
+            return self._classical_superposition(states)
+        # Actual quantum superposition creation logic goes here.
+        # For brevity, this is a stub.
+        return "QuantumSuperposedStatePlaceholder"
+
+    def _classical_superposition(self, states):
+        """
+        Classical analogy of superposition using vector averaging.
+        """
+        avg_state = np.mean(states, axis=0)
+        return avg_state
+
+    def record_entanglement(self, state_id, description):
+        hash_id = hashlib.sha256(description.encode()).hexdigest()
+        self.entanglement_registry[hash_id] = {
+            'state_id': state_id,
+            'description': description,
+            'timestamp': TIMESTAMP
+        }
+        return hash_id
+
+
+# --- Semantic Encoding and Perspective Weighting ---
+
+class SemanticEncoder:
+    """
+    Uses transformer-based semantic models to encode natural language input
+    into multi-perspective embeddings for cognitive synthesis.
+    """
+    def __init__(self):
+        self.tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
+        self.model = AutoModel.from_pretrained('bert-base-uncased')
+        self.weights = torch.ones(MAX_PERSPECTIVES, dtype=torch.float)
+
+    def encode(self, text):
+        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+        outputs = self.model(**inputs, output_hidden_states=True, return_dict=True)
+        # Mean-pool last hidden states for embeddings
+        embedding = outputs.last_hidden_state.mean(dim=1).detach()
+        # Optionally: combine with attention for weighting
+        return embedding
+
+    def update_weights(self, feedback: dict):
+        for i, key in enumerate(sorted(feedback.keys())):
+            increment = feedback[key]
+            self.weights[i] += increment
+        self.weights = torch.softmax(self.weights, dim=0)
+
+
+# --- Dynamic Multi-Modal Graph Management ---
+
+class MultiModalGraph:
+    """
+    Stores and manages heterogeneous multi-perspective nodes and edges.
+    Integrates temporal dynamics and uncertainty as attributes.
+    Thread-safe for concurrent access.
+    """
+    def __init__(self):
+        self.graph = nx.DiGraph()
+        self._lock = threading.Lock()
+        self.node_auto_id = 0
+
+    def add_node(self, perspective_type: str, features: dict, metadata: dict = None):
+        with self._lock:
+            node_id = self.node_auto_id
+            self.node_auto_id += 1
+            attr = {
+                'type': perspective_type,
+                'features': features,
+                'metadata': metadata or {},
+                'timestamp': TIMESTAMP
+            }
+            self.graph.add_node(node_id, **attr)
+            return node_id
+
+    def add_edge(self, src_id: int, tgt_id: int, relation: str, weight: float = 1.0, provenance: dict = None):
+        with self._lock:
+            attr = {
+                'relation': relation,
+                'weight': weight,
+                'provenance': provenance or {},
+                'timestamp': TIMESTAMP
+            }
+            self.graph.add_edge(src_id, tgt_id, **attr)
+
+    def find_clusters(self, weight_threshold=0.7):
+        """
+        Clusters node subsets by strong edge weights.
+        """
+        matrix = nx.to_numpy_array(self.graph, weight='weight')
+        if matrix.size == 0:
+            return []
+        norm_matrix = matrix / matrix.max()
+        clusters = []
+        visited = set()
+        for i in range(len(matrix)):
+            if i not in visited:
+                cluster = set(np.where(norm_matrix[i] >= weight_threshold)[0])
+                cluster.add(i)
+                visited.update(cluster)
+                clusters.append(sorted(cluster))
+        return clusters
+
+    def visualize(self, title="Multi-Modal Perspective Graph"):
+        plt.figure(figsize=(12, 10))
+        pos = nx.spring_layout(self.graph, k=0.5, iterations=50)
+        type_color_map = {
+            'quantum': 'teal',
+            'chaotic': 'purple',
+            'semantic': 'orange',
+            'temporal': 'green',
+            'causal': 'red',
+            'uncertainty': 'gray',
+            'intent': 'blue'
+        }
+        colors = [type_color_map.get(self.graph.nodes[n]['type'], 'black') for n in self.graph.nodes()]
+        nx.draw(self.graph, pos, with_labels=True, node_color=colors, edge_color='lightgray',
+                node_size=600, font_size=10, font_color='black')
+        plt.title(title)
+        plt.show()
+
+
+# --- Ethics & Governance Enforcement ---
+
+class VirtueEthicsConstraintAlgorithm:
+    """
+    Interprets multi-dimensional ethical constraints as a penalty function and enforceable gates.
+    """
+    def __init__(self):
+        # Define virtue vectors in latent space, adjusted online
+        self.virtues = {
+            'non_maleficence': np.array([1.0, 0.0, 0.0]),
+            'consent': np.array([0.0, 1.0, 0.0]),
+            'fairness': np.array([0.0, 0.0, 1.0]),
+        }
+        # Center of virtue space for reference
+        self.virtue_center = np.zeros(3)
+        # Allowed radius for each virtue
+        self.radius = 0.5
+        # Gate thresholds
+        self.warning_threshold = 0.7
+        self.block_threshold = 0.9
+
+    def evaluate(self, action_vec: np.ndarray):
+        """
+        Returns tuple (violation_level, is_blocked).
+        Higher values indicate greater ethical conflict.
+        """
+        distances = {k: np.linalg.norm(action_vec - v) for k, v in self.virtues.items()}
+        max_distance = max(distances.values())
+        violation_level = max(0.0, (max_distance - self.radius) / (1 - self.radius))
+        is_blocked = violation_level > self.block_threshold
+        return violation_level, is_blocked
+    
+    def enforce(self, action_vec: np.ndarray, context: dict):
+        violation, blocked = self.evaluate(action_vec)
+        if blocked:
+            # Log context, trigger human review
+            print("[VECA] Action blocked for ethical violation:", violation)
+            # Additional audit logging steps here
+            return False
+        # Less severe violations could trigger alerts/slowdowns
+        if violation > self.warning_threshold:
+            print("[VECA] Warning: elevated ethical risk detected.")
+        return True
+
+
+# --- Unified Core Controller ---
+
+class HarmonicConductorLayer:
+    """
+    Master orchestrator for multi-domain coherence, ethical governance, and adaptive control.
+    """
+    def __init__(self, modules: dict, ethical_gate: VirtueEthicsConstraintAlgorithm):
+        self.modules = modules  # Expected keys: 'hdg', 'quantum', 'chaos', 'semantic', 'worldmodel'
+        self.ethical_gate = ethical_gate
+        self.theta = self._init_parameters()
+        self.lock = threading.Lock()
+        self.coherence_history = []
+
+    def _init_parameters(self):
+        # Initialize modulation parameters for each module communication channel
+        return {k: np.zeros(10) for k in self.modules}
+
+    def compute_coherence(self):
+        """
+        Calculates multi-module coherence as weighted dot product similarity among state embeddings.
+        """
+        embeddings = {}
+        for name, mod in self.modules.items():
+            embeddings[name] = mod.get_embedding() if hasattr(mod, 'get_embedding') else np.zeros(10)
+        
+        pairs = [(a, b) for idx, a in enumerate(embeddings) for b in list(embeddings)[idx+1:]]
+        scores = []
+        for (a, b) in pairs:
+            sim = np.dot(embeddings[a], embeddings[b]) / (np.linalg.norm(embeddings[a]) * np.linalg.norm(embeddings[b]) + 1e-8)
+            scores.append(sim)
+        coherence = np.mean(scores) if scores else 0.0
+        return coherence
+
+    def compute_stability_penalty(self):
+        """
+        Measures spectral radius or proxy Jacobian norms on reservoirs to avoid chaotic collapse.
+        """
+        reservoir = self.modules.get('chaos')
+        if reservoir:
+            spectral_radius = reservoir.estimate_spectral_radius() if hasattr(reservoir, 'estimate_spectral_radius') else 0.95
+            penalty = max(0, spectral_radius - 0.95) ** 2
+            return penalty
+        return 0.0
+
+    def enforce_ethical_constraints(self):
+        """
+        Coordinates ethical evaluation of intended actions.
+        """
+        action_vec = self._aggregate_modulation_vector()
+        allowed = self.ethical_gate.enforce(action_vec, context={"timestamp": TIMESTAMP})
+        return allowed
+
+    def _aggregate_modulation_vector(self):
+        """
+        Aggregates all module modulation parameters into single numeric vector.
+        """
+        all_params = np.concatenate([self.theta.get(k, np.zeros(10)) for k in sorted(self.theta)])
+        # Normalize for stability
+        norm = np.linalg.norm(all_params)
+        return all_params / (norm + 1e-8)
+
+    def step(self, inputs):
+        """
+        One cycle of perception, coherence computation, ethical check, and modulation command.
+        """
+        with self.lock:
+            coherence = self.compute_coherence()
+            stability_penalty = self.compute_stability_penalty()
+
+            # Loss function: maximize coherence, minimize instability and ethical violation penalty
+            ethical_allowed = self.enforce_ethical_constraints()
+
+            if not ethical_allowed:
+                print("[HCL] Action blocked by VECA. Halting modulation.")
+                return
+            
+            # Multi-objective optimization stub (requires implementation)
+            modulation_update = self._optimize_modulation(coherence, stability_penalty)
+            self._apply_modulation(modulation_update)
+            self.coherence_history.append(coherence)
+
+            # Logging
+            print(f"[HCL] Coherence: {coherence:.4f}, Stability Penalty: {stability_penalty:.6f}")
+            return modulation_update
+
+    def _optimize_modulation(self, coherence, stability_penalty):
+        """
+        Placeholder optimizer balancing objectives with gradient or evolutionary methods.
+        """
+        # Placeholder: simple proportional control
+        modulation_strength = np.clip(coherence - stability_penalty, 0, 1)
+        update = {k: np.ones(10) * modulation_strength for k in self.theta}
+        return update
+
+    def _apply_modulation(self, modulation_update):
+        """
+        Apply modulation parameters to submodules, e.g. attention biases.
+        """
+        for mod_name, params in modulation_update.items():
+            mod = self.modules.get(mod_name)
+            if hasattr(mod, 'modulate'):
+                mod.modulate(params)
+
+
+# --- Demonstration stubs for module interfaces ---
+
+class StubModule:
+    def __init__(self, name):
+        self.name = name
+
+    def get_embedding(self):
+        # Random embedding for demo
+        np.random.seed(hash(self.name) % 1_000_000)
+        return np.random.rand(10)
+
+    def modulate(self, params):
+        print(f"{self.name} module modulation with params norm {np.linalg.norm(params):.3f}")
+
+
+# --- Main Flow ---
+
+if __name__ == '__main__':
+    # Instantiate modules
+    hdg = StubModule('HDG')
+    quantum = StubModule('Quantum')
+    chaos = StubModule('ChaosReservoir')
+    semantic = StubModule('SemanticEncoder')
+    worldmodel = StubModule('WorldModel')
+    
+    ethical_gate = VirtueEthicsConstraintAlgorithm()
+    modules = {
+        'hdg': hdg,
+        'quantum': quantum,
+        'chaos': chaos,
+        'semantic': semantic,
+        'worldmodel': worldmodel
+    }
+    
+    hcl = HarmonicConductorLayer(modules, ethical_gate)
+    
+    # Ingest a hypothetical input (simulated for demo)
+    input_data = "Exploring complex multi-perspective cognition via quantum-chaotic synthesis."
+    
+    # Run a single step (would be looped or event-driven in reality)
+    modulation = hcl.step(input_data)
+
+    # Visualize the underlying graph (basic demo - replace with real HDG)
+    g = MultiModalGraph()
+    n1 = g.add_node('semantic', {'text': input_data})
+    n2 = g.add_node('quantum', {'state': 'entangled'})
+    n3 = g.add_node('chaotic', {'pattern': 'lorenz_trajectory'})
+    g.add_edge(n1, n2, 'supports', 0.9)
+    g.add_edge(n2, n3, 'modulates', 0.85)
+    g.visualize()
