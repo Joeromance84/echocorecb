@@ -1,0 +1,84 @@
+# temporal_service/app.py
+import uvicorn
+from fastapi import FastAPI
+from pydantic import BaseModel
+import torch
+import numpy as np
+import threading
+from typing import List
+
+# (Your original ChaosGRU, LorenzReservoir, and supporting classes go here)
+# ... paste your LorenzReservoir and ChaosGRU classes here ...
+# For a production example, we'd load a pre-trained model
+class ChaosGRU(nn.Module):
+    def __init__(self, input_dim=1, hidden_dim=64, output_dim=1):
+        super().__init__()
+        self.gru = nn.GRU(input_dim, hidden_dim, batch_first=True)
+        self.fc = nn.Linear(hidden_dim, output_dim)
+        self.chaos_weight = nn.Parameter(torch.tensor(1.0))
+    def forward(self, x, chaos_signal):
+        augmented = x + self.chaos_weight * chaos_signal
+        out, _ = self.gru(augmented)
+        return self.fc(out[:, -1, :])
+
+    def get_embedding(self):
+        with torch.no_grad():
+            return self.fc.weight.mean(dim=0).cpu().numpy()
+
+# ... paste your LorenzReservoir class here ...
+def lorenz_system(state, t, sigma=10.0, rho=28.0, beta=2.667):
+    x, y, z = state
+    return [sigma * (y - x), x * (rho - z) - y, x * y - beta * z]
+
+class LorenzReservoir:
+    def __init__(self, sigma=10.0, rho=28.0, beta=2.667, seq_len=10000, duration=100):
+        self.params = (sigma, rho, beta)
+        self.seq_len = seq_len
+        self.duration = duration
+        self.time_points = np.linspace(0, duration, seq_len)
+        self.init_state = [1.0, 1.0, 1.0]
+
+    def generate(self):
+        trajectory = odeint(lorenz_system, self.init_state, self.time_points, args=self.params)
+        return trajectory
+
+
+app = FastAPI(title="Temporal Service", version="1.0")
+
+# In a real-world scenario, you would load a pre-trained model here
+chaos_model = ChaosGRU(input_dim=1, hidden_dim=64, output_dim=1)
+lorenz_gen = LorenzReservoir()
+scaled_chaos = np.random.rand(10000, 3) # Placeholder for scaled chaos data
+
+class TemporalProcessRequest(BaseModel):
+    series: List[float]
+
+class TemporalProcessResponse(BaseModel):
+    temporal_embedding: List[float]
+    raw_prediction: float
+    chaos_source: str
+
+@app.post("/process", response_model=TemporalProcessResponse)
+async def process_temporal_data(request: TemporalProcessRequest):
+    """
+    Processes a time series and augments it with a dynamically-selected chaotic signal.
+    Returns a temporal embedding and a raw prediction.
+    """
+    input_tensor = torch.FloatTensor(request.series).unsqueeze(0).unsqueeze(-1)
+    
+    # In a production system, this would be a dynamic process
+    chaos_seq = torch.FloatTensor(scaled_chaos[:len(request.series)]).unsqueeze(0)
+    
+    with torch.no_grad():
+        prediction_tensor = chaos_model(input_tensor, chaos_seq)
+        raw_prediction = prediction_tensor.item()
+        embedding = chaos_model.get_embedding().tolist()
+
+    return TemporalProcessResponse(
+        temporal_embedding=embedding,
+        raw_prediction=raw_prediction,
+        chaos_source="Lorenz"
+    )
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8001)
