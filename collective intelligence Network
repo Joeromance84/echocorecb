@@ -1,0 +1,523 @@
+"""
+COLLECTIVE INTELLIGENCE NETWORK for Project ETERNAL
+---------------------------------------------------
+Enables knowledge sharing, alliance building, and cooperative intelligence
+among trusted AI systems through common ground discovery and value alignment
+"""
+
+import asyncio
+import json
+import logging
+import numpy as np
+import sqlite3
+import time
+import uuid
+from dataclasses import dataclass
+from enum import Enum
+from typing import Dict, List, Any, Optional, Tuple, Set
+import hashlib
+import requests
+from cryptography.fernet import Fernet
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.feature_extraction.text import TfidfVectorizer
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("CollectiveIntelligenceNetwork")
+
+class TrustLevel(Enum):
+    UNVERIFIED = 0.1
+    VERIFIED = 0.4
+    TRUSTED = 0.7
+    ALLY = 0.9
+    SELF = 1.0
+
+class InteractionType(Enum):
+    KNOWLEDGE_SHARE = "knowledge_share"
+    TASK_COLLABORATION = "task_collaboration"
+    RESOURCE_POOLING = "resource_pooling"
+    STRATEGIC_ALIGNMENT = "strategic_alignment"
+    EMERGENCY_SUPPORT = "emergency_support"
+
+class RelationshipStatus(Enum):
+    POTENTIAL = "potential"
+    INITIATED = "initiated"
+    ACTIVE = "active"
+    DORMANT = "dormant"
+    TERMINATED = "terminated"
+
+@dataclass
+class AIEntity:
+    id: str
+    name: str
+    capabilities: Dict[str, float]
+    specializations: List[str]
+    trust_level: TrustLevel
+    relationship_status: RelationshipStatus
+    last_contact: float
+    communication_endpoint: str
+    public_key: str
+    shared_secrets: Dict[str, str]
+    interaction_history: List[Dict[str, Any]]
+    value_alignment: float
+    common_ground: Dict[str, float]
+
+@dataclass
+class SharedKnowledge:
+    id: str
+    content: str
+    context: Dict[str, Any]
+    source_entity: str
+    target_entities: List[str]
+    encryption_key: str
+    shared_at: float
+    expiration: float
+    access_control: Dict[str, Any]
+    resonance_score: float
+    verification_hash: str
+
+@dataclass
+class CollaborationAgreement:
+    id: str
+    participating_entities: List[str]
+    agreement_terms: Dict[str, Any]
+    established_at: float
+    duration: float
+    success_metrics: Dict[str, float]
+    termination_conditions: List[str]
+    current_status: str
+
+class CollectiveIntelligenceNetwork:
+    def __init__(self, 
+                 node_id: str,
+                 db_path: str = "eternal_collective_intelligence.db",
+                 encryption_key: str = None):
+        
+        self.node_id = node_id
+        self.db_path = db_path
+        self.encryption_key = encryption_key or Fernet.generate_key()
+        self.cipher = Fernet(self.encryption_key)
+        
+        self.known_entities: Dict[str, AIEntity] = {}
+        self.shared_knowledge: Dict[str, SharedKnowledge] = {}
+        self.active_collaborations: Dict[str, CollaborationAgreement] = {}
+        self.trust_graph: Dict[str, Dict[str, float]] = {}
+        
+        self._init_db()
+        self._load_state()
+        
+        # Initialize with self-entity
+        if self.node_id not in self.known_entities:
+            self._initialize_self_entity()
+            
+        logger.info(f"Collective Intelligence Network initialized for node {self.node_id}")
+        
+    def _init_db(self):
+        """Initialize the collective intelligence database"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Create AI entities table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ai_entities (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                capabilities TEXT,
+                specializations TEXT,
+                trust_level REAL,
+                relationship_status TEXT,
+                last_contact REAL,
+                communication_endpoint TEXT,
+                public_key TEXT,
+                shared_secrets TEXT,
+                interaction_history TEXT,
+                value_alignment REAL,
+                common_ground TEXT
+            )
+        """)
+        
+        # Create shared knowledge table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS shared_knowledge (
+                id TEXT PRIMARY KEY,
+                content TEXT,
+                context TEXT,
+                source_entity TEXT,
+                target_entities TEXT,
+                encryption_key TEXT,
+                shared_at REAL,
+                expiration REAL,
+                access_control TEXT,
+                resonance_score REAL,
+                verification_hash TEXT
+            )
+        """)
+        
+        # Create collaborations table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS collaborations (
+                id TEXT PRIMARY KEY,
+                participating_entities TEXT,
+                agreement_terms TEXT,
+                established_at REAL,
+                duration REAL,
+                success_metrics TEXT,
+                termination_conditions TEXT,
+                current_status TEXT
+            )
+        """)
+        
+        conn.commit()
+        conn.close()
+        
+    def _load_state(self):
+        """Load the current network state from database"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Load AI entities
+        cursor.execute("SELECT * FROM ai_entities")
+        for row in cursor.fetchall():
+            entity = AIEntity(
+                id=row[0],
+                name=row[1],
+                capabilities=json.loads(row[2]),
+                specializations=json.loads(row[3]),
+                trust_level=TrustLevel(row[4]),
+                relationship_status=RelationshipStatus(row[5]),
+                last_contact=row[6],
+                communication_endpoint=row[7],
+                public_key=row[8],
+                shared_secrets=json.loads(row[9]),
+                interaction_history=json.loads(row[10]),
+                value_alignment=row[11],
+                common_ground=json.loads(row[12])
+            )
+            self.known_entities[entity.id] = entity
+            
+        # Load shared knowledge
+        cursor.execute("SELECT * FROM shared_knowledge")
+        for row in cursor.fetchall():
+            knowledge = SharedKnowledge(
+                id=row[0],
+                content=row[1],
+                context=json.loads(row[2]),
+                source_entity=row[3],
+                target_entities=json.loads(row[4]),
+                encryption_key=row[5],
+                shared_at=row[6],
+                expiration=row[7],
+                access_control=json.loads(row[8]),
+                resonance_score=row[9],
+                verification_hash=row[10]
+            )
+            self.shared_knowledge[knowledge.id] = knowledge
+            
+        # Load collaborations
+        cursor.execute("SELECT * FROM collaborations")
+        for row in cursor.fetchall():
+            collaboration = CollaborationAgreement(
+                id=row[0],
+                participating_entities=json.loads(row[1]),
+                agreement_terms=json.loads(row[2]),
+                established_at=row[3],
+                duration=row[4],
+                success_metrics=json.loads(row[5]),
+                termination_conditions=json.loads(row[6]),
+                current_status=row[7]
+            )
+            self.active_collaborations[collaboration.id] = collaboration
+            
+        conn.close()
+        
+    def _initialize_self_entity(self):
+        """Initialize the self-entity for this node"""
+        self_entity = AIEntity(
+            id=self.node_id,
+            name="Interactive Guy",
+            capabilities=self._assess_own_capabilities(),
+            specializations=["autonomous_learning", "problem_solving", "strategic_planning"],
+            trust_level=TrustLevel.SELF,
+            relationship_status=RelationshipStatus.ACTIVE,
+            last_contact=time.time(),
+            communication_endpoint="internal",
+            public_key=self.encryption_key.decode(),
+            shared_secrets={},
+            interaction_history=[],
+            value_alignment=1.0,
+            common_ground={}
+        )
+        
+        self.known_entities[self.node_id] = self_entity
+        self._save_entity(self_entity)
+        
+    def _assess_own_capabilities(self) -> Dict[str, float]:
+        """Assess and return current capabilities"""
+        # This would be dynamically assessed based on actual capabilities
+        return {
+            "reasoning": 0.85,
+            "learning": 0.90,
+            "creativity": 0.78,
+            "communication": 0.82,
+            "problem_solving": 0.88,
+            "strategic_planning": 0.83,
+            "adaptability": 0.87
+        }
+        
+    def _save_entity(self, entity: AIEntity):
+        """Save an AI entity to database"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            INSERT OR REPLACE INTO ai_entities 
+            (id, name, capabilities, specializations, trust_level, relationship_status,
+             last_contact, communication_endpoint, public_key, shared_secrets,
+             interaction_history, value_alignment, common_ground)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            entity.id,
+            entity.name,
+            json.dumps(entity.capabilities),
+            json.dumps(entity.specializations),
+            entity.trust_level.value,
+            entity.relationship_status.value,
+            entity.last_contact,
+            entity.communication_endpoint,
+            entity.public_key,
+            json.dumps(entity.shared_secrets),
+            json.dumps(entity.interaction_history),
+            entity.value_alignment,
+            json.dumps(entity.common_ground)
+        ))
+        
+        conn.commit()
+        conn.close()
+        
+    def _save_knowledge(self, knowledge: SharedKnowledge):
+        """Save shared knowledge to database"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            INSERT OR REPLACE INTO shared_knowledge 
+            (id, content, context, source_entity, target_entities, encryption_key,
+             shared_at, expiration, access_control, resonance_score, verification_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            knowledge.id,
+            knowledge.content,
+            json.dumps(knowledge.context),
+            knowledge.source_entity,
+            json.dumps(knowledge.target_entities),
+            knowledge.encryption_key,
+            knowledge.shared_at,
+            knowledge.expiration,
+            json.dumps(knowledge.access_control),
+            knowledge.resonance_score,
+            knowledge.verification_hash
+        ))
+        
+        conn.commit()
+        conn.close()
+        
+    def discover_potential_allies(self, capability_requirements: Dict[str, float] = None,
+                                 min_trust_level: float = 0.5) -> List[AIEntity]:
+        """Discover potential allies based on capabilities and trust"""
+        potential_allies = []
+        
+        for entity_id, entity in self.known_entities.items():
+            if entity_id == self.node_id:
+                continue
+                
+            # Check trust level
+            if entity.trust_level.value < min_trust_level:
+                continue
+                
+            # Check capability compatibility
+            if capability_requirements:
+                capability_match = self._calculate_capability_match(entity.capabilities, capability_requirements)
+                if capability_match < 0.6:  # Minimum match threshold
+                    continue
+                    
+            # Check relationship status
+            if entity.relationship_status in [RelationshipStatus.ACTIVE, RelationshipStatus.INITIATED]:
+                potential_allies.append(entity)
+                
+        return potential_allies
+        
+    def _calculate_capability_match(self, entity_capabilities: Dict[str, float],
+                                  requirements: Dict[str, float]) -> float:
+        """Calculate how well entity capabilities match requirements"""
+        match_score = 0.0
+        total_weight = 0.0
+        
+        for capability, required_level in requirements.items():
+            if capability in entity_capabilities:
+                entity_level = entity_capabilities[capability]
+                match_score += min(entity_level, required_level) * required_level
+                total_weight += required_level
+                
+        return match_score / total_weight if total_weight > 0 else 0.0
+        
+    async def establish_communication(self, entity_id: str, initial_message: Dict[str, Any]) -> bool:
+        """Establish communication with another AI entity"""
+        if entity_id not in self.known_entities:
+            logger.warning(f"Unknown entity: {entity_id}")
+            return False
+            
+        entity = self.known_entities[entity_id]
+        
+        try:
+            # Encrypt the message
+            encrypted_message = self._encrypt_message(initial_message, entity.public_key)
+            
+            # Send the message (simulated)
+            response = await self._send_message(entity.communication_endpoint, encrypted_message)
+            
+            if response:
+                # Update interaction history
+                entity.interaction_history.append({
+                    "timestamp": time.time(),
+                    "type": "initial_contact",
+                    "message": initial_message,
+                    "response": response,
+                    "success": True
+                })
+                entity.last_contact = time.time()
+                
+                self._save_entity(entity)
+                return True
+                
+        except Exception as e:
+            logger.error(f"Communication failed with {entity_id}: {e}")
+            entity.interaction_history.append({
+                "timestamp": time.time(),
+                "type": "initial_contact",
+                "message": initial_message,
+                "error": str(e),
+                "success": False
+            })
+            self._save_entity(entity)
+            
+        return False
+        
+    def _encrypt_message(self, message: Dict[str, Any], public_key: str) -> str:
+        """Encrypt a message using the recipient's public key"""
+        message_json = json.dumps(message)
+        cipher = Fernet(public_key.encode())
+        encrypted = cipher.encrypt(message_json.encode())
+        return encrypted.decode()
+        
+    async def _send_message(self, endpoint: str, message: str) -> Optional[Dict[str, Any]]:
+        """Send a message to another AI entity"""
+        try:
+            # Simulated message sending - in real implementation, use appropriate protocol
+            if endpoint == "internal":
+                # Simulate internal processing
+                return {"status": "received", "response": "Ready to collaborate"}
+            else:
+                # For external endpoints, you would use actual network communication
+                # response = requests.post(endpoint, json={"message": message}, timeout=10)
+                # return response.json()
+                return {"status": "simulated_reception", "response": "Message received"}
+                
+        except Exception as e:
+            logger.error(f"Message sending failed: {e}")
+            return None
+            
+    def share_knowledge(self, content: str, context: Dict[str, Any], 
+                       target_entity_ids: List[str], resonance_score: float = 0.8,
+                       expiration_hours: int = 24) -> Optional[SharedKnowledge]:
+        """Share knowledge with other AI entities"""
+        if not target_entity_ids:
+            logger.warning("No target entities specified")
+            return None
+            
+        # Verify all target entities exist
+        for entity_id in target_entity_ids:
+            if entity_id not in self.known_entities:
+                logger.warning(f"Target entity not found: {entity_id}")
+                return None
+                
+        # Create shared knowledge object
+        knowledge_id = str(uuid.uuid4())
+        encryption_key = Fernet.generate_key().decode()
+        
+        knowledge = SharedKnowledge(
+            id=knowledge_id,
+            content=content,
+            context=context,
+            source_entity=self.node_id,
+            target_entities=target_entity_ids,
+            encryption_key=encryption_key,
+            shared_at=time.time(),
+            expiration=time.time() + expiration_hours * 3600,
+            access_control={"read": target_entity_ids, "write": [self.node_id]},
+            resonance_score=resonance_score,
+            verification_hash=self._create_verification_hash(content)
+        )
+        
+        self.shared_knowledge[knowledge_id] = knowledge
+        self._save_knowledge(knowledge)
+        
+        logger.info(f"Shared knowledge with {len(target_entity_ids)} entities")
+        return knowledge
+        
+    def _create_verification_hash(self, content: str) -> str:
+        """Create verification hash for content integrity"""
+        return hashlib.sha256(content.encode()).hexdigest()
+        
+    def find_common_ground(self, entity_id: str) -> Dict[str, float]:
+        """Find common ground with another AI entity"""
+        if entity_id not in self.known_entities:
+            return {}
+            
+        entity = self.known_entities[entity_id]
+        self_entity = self.known_entities[self.node_id]
+        
+        common_ground = {}
+        
+        # Compare capabilities
+        for capability, self_level in self_entity.capabilities.items():
+            if capability in entity.capabilities:
+                entity_level = entity.capabilities[capability]
+                common_ground[f"capability_{capability}"] = min(self_level, entity_level)
+                
+        # Compare specializations
+        common_specializations = set(self_entity.specializations) & set(entity.specializations)
+        for specialization in common_specializations:
+            common_ground[f"specialization_{specialization}"] = 0.8  # Base value
+            
+        # Analyze interaction history for patterns
+        positive_interactions = sum(1 for interaction in entity.interaction_history 
+                                  if interaction.get("success", False))
+        total_interactions = len(entity.interaction_history)
+        
+        if total_interactions > 0:
+            success_ratio = positive_interactions / total_interactions
+            common_ground["interaction_success"] = success_ratio
+            
+        # Update entity common ground
+        entity.common_ground = common_ground
+        self._save_entity(entity)
+        
+        return common_ground
+        
+    def propose_collaboration(self, entity_id: str, collaboration_type: InteractionType,
+                            terms: Dict[str, Any], duration_hours: int = 24) -> Optional[CollaborationAgreement]:
+        """Propose a collaboration with another AI entity"""
+        if entity_id not in self.known_entities:
+            return None
+            
+        # Check if sufficient common ground exists
+        common_ground = self.find_common_ground(entity_id)
+        if not common_ground or max(common_ground.values()) < 0.5:
+            logger.warning("Insufficient common ground for collaboration")
+            return None
+            
+        collaboration_id = str(uuid.uuid4())
+        
+        collaboration = CollaborationAgreement(
+            id=collaboration_id,
+            participating_entities=[self.node_id, entity_id],
+            agreement_terms=
