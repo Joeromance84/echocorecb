@@ -1,0 +1,251 @@
+# File: core_cognitive_engine/eternal_core.py
+
+import asyncio
+import json
+import traceback
+from collections import deque
+from dataclasses import dataclass
+from enum import Enum
+from typing import Dict, List, Optional, Any, Callable, Awaitable
+import time
+import uuid
+
+class TaskState(Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    TRANSMUTED = "transmuted"
+    GROUNDED = "grounded"
+
+class ResonanceLevel(Enum):
+    ALPHA = 0.9  # Strong resonance - immediate processing
+    BETA = 0.7   # Medium resonance - scheduled processing
+    GAMMA = 0.5  # Weak resonance - background processing
+    OMEGA = 0.3  # Faint resonance - transmute or discard
+
+@dataclass
+class EternalTask:
+    task_id: str
+    original_id: str
+    payload: Dict[str, Any]
+    created_at: float
+    resonance: ResonanceLevel
+    max_retries: int = 3
+    retry_count: int = 0
+    state: TaskState = TaskState.PENDING
+    processing_history: List[Dict] = None
+    transmute_count: int = 0
+    
+    def __post_init__(self):
+        if self.processing_history is None:
+            self.processing_history = []
+    
+    def to_dict(self):
+        return {
+            "task_id": self.task_id,
+            "original_id": self.original_id,
+            "resonance": self.resonance.value,
+            "state": self.state.value,
+            "retry_count": self.retry_count,
+            "transmute_count": self.transmute_count,
+            "max_retries": self.max_retries,
+            "created_at": self.created_at,
+            "history_length": len(self.processing_history)
+        }
+
+class ResonantTaskEngine:
+    """Core nervous system for Project ETERNAL"""
+    
+    def __init__(
+        self,
+        max_concurrent_tasks: int = 10,
+        max_history: int = 1000,
+        base_backoff_seconds: float = 0.5,
+        max_transmutes_per_original: int = 2
+    ):
+        self.task_queue = asyncio.Queue()
+        self.completed_tasks = deque(maxlen=max_history)
+        self.failed_tasks = deque(maxlen=max_history)
+        self.transmuted_tasks = deque(maxlen=max_history)
+        self.semaphore = asyncio.Semaphore(max_concurrent_tasks)
+        self.is_running = False
+        self.processed_count = 0
+        self.base_backoff_seconds = base_backoff_seconds
+        self.max_transmutes_per_original = max_transmutes_per_original
+        self.transmute_counts: Dict[str, int] = {}
+        
+    async def submit_task(self, payload: Dict, resonance: ResonanceLevel, task_fn: Callable[[Dict], Awaitable[Any]]) -> str:
+        """Submit a new task to the engine"""
+        task_id = str(uuid.uuid4())
+        task = EternalTask(
+            task_id=task_id,
+            original_id=task_id,
+            payload=payload,
+            created_at=time.time(),
+            resonance=resonance
+        )
+        task.payload['fn'] = task_fn  # Attach the function to the payload
+        await self.task_queue.put(task)
+        print(f"[ENGINE] Task {task.task_id} submitted.")
+        return task.task_id
+    
+    async def process_loop(self):
+        """Main processing loop"""
+        self.is_running = True
+        print("[ENGINE] Core processing loop activated.")
+        while self.is_running or not self.task_queue.empty():
+            try:
+                task = await asyncio.wait_for(self.task_queue.get(), timeout=1.0)
+                async with self.semaphore:
+                    await self._process_task(task)
+                self.task_queue.task_done()
+            except asyncio.TimeoutError:
+                if not self.is_running:
+                    break
+                continue
+    
+    async def stop(self):
+        """Gracefully stop the engine"""
+        print("[ENGINE] Shutting down...")
+        self.is_running = False
+        await self.task_queue.join()
+        print("[ENGINE] Shutdown complete.")
+
+    async def _process_task(self, task: EternalTask):
+        """Process an individual task with resilience"""
+        task.state = TaskState.PROCESSING
+        task_fn = task.payload.get('fn')
+        if not task_fn:
+            print(f"[ERROR] Task {task.task_id} has no execution function.")
+            self.failed_tasks.append(task)
+            return
+
+        print(f"[RUN] Task {task.task_id} (retries: {task.retry_count}, transmutes: {task.transmute_count})")
+        
+        try:
+            result = await task_fn(task.payload)
+            task.state = TaskState.COMPLETED
+            task.processing_history.append({"result": result, "timestamp": time.time()})
+            self.completed_tasks.append(task)
+            self.processed_count += 1
+            print(f"[SUCCESS] Task {task.task_id} completed.")
+                
+        except Exception as e:
+            tb = traceback.format_exc()
+            task.state = TaskState.FAILED
+            task.processing_history.append({
+                "exception": str(e),
+                "traceback": tb,
+                "timestamp": time.time()
+            })
+            await self._handle_processing_exception(task, e, tb)
+    
+    async def _handle_processing_exception(self, task: EternalTask, exception: Exception, tb: str):
+        """Handles exceptions with retry or transmutation"""
+        self.transmute_counts.setdefault(task.original_id, 0)
+        
+        if task.retry_count < task.max_retries:
+            task.retry_count += 1
+            delay = self.base_backoff_seconds * (2 ** (task.retry_count - 1))
+            print(f"[RETRY] Task {task.task_id} failed. Retrying after {delay:.2f}s.")
+            await asyncio.sleep(delay)
+            await self.task_queue.put(task)
+            return
+
+        if self.transmute_counts[task.original_id] < self.max_transmutes_per_original:
+            self.transmute_counts[task.original_id] += 1
+            await self._transmute_failure(task, exception, tb)
+        else:
+            task.state = TaskState.GROUNDED
+            self.failed_tasks.append(task)
+            print(f"[GROUNDED] Task {task.original_id} grounded after {self.max_transmutes_per_original} transmutes.")
+    
+    async def _transmute_failure(self, task: EternalTask, exception: Exception, tb: str):
+        """Transmutes a failed task into a new, more resilient task"""
+        print(f"[TRANSMUTE] Task {task.task_id} is being transmuted...")
+        
+        # Analyze failure to inform transmutation
+        analysis = self._analyze_failure(task, exception, tb)
+        
+        new_payload = dict(task.payload)
+        new_payload.update({
+            "transmuted_from": task.task_id,
+            "transmute_reason": analysis['reason'],
+            "transmute_fix": analysis['fix']
+        })
+        
+        new_task_id = str(uuid.uuid4())
+        new_task = EternalTask(
+            task_id=new_task_id,
+            original_id=task.original_id,
+            payload=new_payload,
+            created_at=time.time(),
+            resonance=ResonanceLevel.BETA,
+            transmute_count=task.transmute_count + 1
+        )
+        
+        self.transmuted_tasks.append(task)
+        await self.task_queue.put(new_task)
+        print(f"[TRANSMUTE] New task {new_task_id} created from {task.task_id}.")
+
+    def _analyze_failure(self, task: EternalTask, exception: Exception, tb: str) -> Dict:
+        """Analyzes a failure to determine the best course of transmutation"""
+        reason = "generic_failure"
+        fix = "generic_reparameterization"
+        
+        if isinstance(exception, ZeroDivisionError):
+            reason = "division_by_zero"
+            fix = "add_nonzero_guard_rule"
+        elif "network" in str(exception).lower() or "timeout" in str(exception).lower():
+            reason = "network_issue"
+            fix = "add_timeout_increase_on_retry"
+        
+        return {"reason": reason, "fix": fix}
+
+# --- Example Task Function ---
+async def example_task_fn(payload: Dict) -> Dict:
+    """A simple task that can fail"""
+    if payload.get('fail_on_attempt') == payload.get('retry_count'):
+        raise RuntimeError(f"Failing on purpose at retry {payload.get('retry_count')}")
+    
+    if payload.get('sim_network_error'):
+        # Simulate a network error after some work
+        await asyncio.sleep(0.5)
+        raise ConnectionError("Simulated network issue")
+
+    await asyncio.sleep(0.1)
+    return {"status": "success", "message": "Task completed successfully"}
+
+# --- Main execution block for testing ---
+async def test_eternal_core():
+    engine = ResonantTaskEngine(max_concurrent_tasks=2, max_transmutes_per_original=1)
+    
+    # Task that will succeed
+    await engine.submit_task({"data": "mission_alpha"}, ResonanceLevel.ALPHA, example_task_fn)
+    
+    # Task that will fail and be transmuted
+    await engine.submit_task({"data": "mission_omega", "fail_on_attempt": 0}, ResonanceLevel.OMEGA, example_task_fn)
+    
+    # Task that will fail multiple times and be grounded
+    await engine.submit_task({"data": "mission_grounded", "fail_on_attempt": 0, "max_retries": 2}, ResonanceLevel.GAMMA, example_task_fn)
+
+    # Start the processing loop
+    processing_task = asyncio.create_task(engine.process_loop())
+    
+    # Wait for tasks to complete/fail
+    await asyncio.sleep(3)
+    
+    # Stop the engine
+    await engine.stop()
+    await processing_task
+    
+    print("\n--- Final Engine State Report ---")
+    print(f"Processed Tasks: {engine.processed_count}")
+    print(f"Completed Tasks: {len(engine.completed_tasks)}")
+    print(f"Failed Tasks (Grounded): {len(engine.failed_tasks)}")
+    print(f"Transmuted Tasks: {len(engine.transmuted_tasks)}")
+    
+if __name__ == "__main__":
+    asyncio.run(test_eternal_core())
+
