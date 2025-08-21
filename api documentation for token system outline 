@@ -1,0 +1,26 @@
+# api_documentation.py
+from fastapi import FastAPI
+from fastapi.openapi.utils import get_openapi
+
+app = FastAPI()
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+        
+    openapi_schema = get_openapi(
+        title="Energy-Backed Token Economy API",
+        version="1.0.0",
+        description="Production API for managing energy-backed tokens in resonant network",
+        routes=app.routes,
+    )
+    
+    # Add custom documentation
+    openapi_schema["info"]["x-logo"] = {
+        "url": "https://example.com/logo.png"
+    }
+    
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+app.openapi = custom_openapi
