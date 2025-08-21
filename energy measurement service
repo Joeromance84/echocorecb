@@ -1,0 +1,49 @@
+# production_energy_service.py
+import asyncio
+import time
+from dataclasses import dataclass
+from typing import Dict, List, Optional
+import numpy as np
+from prometheus_client import Counter, Gauge, Histogram
+import pynvml
+import psutil
+from opentelemetry import trace
+
+tracer = trace.get_tracer("energy.service")
+
+class ProductionEnergyService:
+    def __init__(self):
+        self.energy_metrics = {
+            'gpu_energy': Counter('gpu_energy_joules', 'GPU energy consumption'),
+            'cpu_energy': Counter('cpu_energy_joules', 'CPU energy consumption'),
+            'system_power': Gauge('system_power_watts', 'Total system power')
+        }
+        
+    @tracer.start_as_current_span("measure_energy")
+    async def measure_energy(self, device_type: str, duration: float) -> Dict:
+        """Production-grade energy measurement with telemetry"""
+        try:
+            with tracer.start_as_current_span("hardware_measurement"):
+                measurements = await self._measure_with_retry(device_type, duration)
+                
+            with tracer.start_as_current_span("quality_validation"):
+                validated = self._validate_measurement_quality(measurements)
+                
+            with tracer.start_as_current_span("cryptographic_signing"):
+                signed = self._sign_measurement(validated)
+                
+            return signed
+            
+        except Exception as e:
+            self._handle_measurement_error(e)
+            raise
+
+    async def _measure_with_retry(self, device_type: str, duration: float, max_retries: int = 3):
+        """Retry logic for hardware measurements"""
+        for attempt in range(max_retries):
+            try:
+                return await self._actual_measurement(device_type, duration)
+            except HardwareError as e:
+                if attempt == max_retries - 1:
+                    raise
+                await asyncio.sleep(2 ** attempt)  # Exponential backoff
