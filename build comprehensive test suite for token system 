@@ -1,0 +1,30 @@
+# tests/test_energy_service.py
+import pytest
+from unittest.mock import AsyncMock, patch
+from services.energy_service import ProductionEnergyService
+
+@pytest.mark.asyncio
+async def test_energy_measurement_happy_path():
+    """Test successful energy measurement"""
+    service = ProductionEnergyService()
+    
+    with patch('services.energy_service.pynvml.nvmlDeviceGetTotalEnergyConsumption') as mock_energy:
+        mock_energy.return_value = 1000000  # 1000 joules
+        
+        result = await service.measure_energy('gpu', 1.0)
+        
+        assert result['joules'] == 1000.0
+        assert 'signature' in result
+
+@pytest.mark.asyncio
+async def test_energy_measurement_retry_logic():
+    """Test retry logic on hardware failure"""
+    service = ProductionEnergyService()
+    
+    with patch('services.energy_service.pynvml.nvmlDeviceGetTotalEnergyConsumption', 
+               side_effect=HardwareError("GPU not available")) as mock_energy:
+        
+        with pytest.raises(HardwareError):
+            await service.measure_energy('gpu', 1.0)
+        
+        assert mock_energy.call_count == 3  # Should retry 3 times
