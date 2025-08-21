@@ -1,0 +1,6 @@
+- Energy Measurement Service (per-node)
+- Token Management Service
+- Auction & Scheduling Service
+- Telemetry & Monitoring Service
+- Blockchain Ledger Service (for settlement)
+- API Gateway
