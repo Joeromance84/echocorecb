@@ -1,0 +1,45 @@
+# k8s/energy-service-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: energy-service
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: energy-service
+  template:
+    metadata:
+      labels:
+        app: energy-service
+    spec:
+      containers:
+      - name: energy-service
+        image: energy-service:latest
+        ports:
+        - containerPort: 8080
+        resources:
+          limits:
+            cpu: "1"
+            memory: "512Mi"
+          requests:
+            cpu: "500m"
+            memory: "256Mi"
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: database-secrets
+              key: connection-string
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
