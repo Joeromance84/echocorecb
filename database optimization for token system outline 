@@ -1,0 +1,9 @@
+-- database/optimization.sql
+-- Create indexes for frequent queries
+CREATE INDEX idx_tokens_source ON energy_tokens (energy_source);
+CREATE INDEX idx_tokens_creation ON energy_tokens (creation_time);
+CREATE INDEX idx_measurements_time ON energy_measurements (measurement_time);
+
+-- Partition tables by time
+CREATE TABLE energy_measurements_y2023m11 PARTITION OF energy_measurements
+    FOR VALUES FROM ('2023-11-01') TO ('2023-12-01');
