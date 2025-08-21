@@ -1,0 +1,66 @@
+# production_token_service.py
+from sqlalchemy import Column, String, Float, DateTime, JSON, create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from contextlib import contextmanager
+import uuid
+import time
+
+Base = declarative_base()
+
+class EnergyTokenDB(Base):
+    __tablename__ = 'energy_tokens'
+    
+    token_id = Column(String, primary_key=True)
+    joules_backing = Column(Float)
+    source_node = Column(String)
+    energy_source = Column(String)
+    creation_time = Column(DateTime)
+    quantum_state = Column(JSON)
+    coherence = Column(Float)
+    thermal_efficiency = Column(Float)
+    signature = Column(String)
+
+class ProductionTokenService:
+    def __init__(self, database_url: str):
+        self.engine = create_engine(database_url, pool_size=20, max_overflow=10)
+        self.Session = sessionmaker(bind=self.engine)
+        Base.metadata.create_all(self.engine)
+        
+    @contextmanager
+    def _get_session(self):
+        """Context manager for database sessions"""
+        session = self.Session()
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+            
+    async def create_token(self, measurement: Dict, node_id: str) -> Dict:
+        """Atomic token creation with database transaction"""
+        with self._get_session() as session:
+            try:
+                token = EnergyTokenDB(
+                    token_id=str(uuid.uuid4()),
+                    joules_backing=measurement['joules'],
+                    source_node=node_id,
+                    energy_source=measurement['source'],
+                    creation_time=datetime.utcnow(),
+                    quantum_state=measurement.get('quantum_state', {}),
+                    coherence=measurement.get('coherence', 0.8),
+                    thermal_efficiency=self._calculate_efficiency(measurement['source']),
+                    signature=measurement['signature']
+                )
+                
+                session.add(token)
+                session.flush()
+                
+                return self._format_token_response(token)
+                
+            except Exception as e:
+                self._log_token_creation_error(e)
+                raise
