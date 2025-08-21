@@ -1,0 +1,20 @@
+# tests/load_test.py
+import locust
+from locust import HttpUser, task, between
+
+class EnergyEconomyLoadTest(HttpUser):
+    wait_time = between(1, 5)
+    
+    @task
+    def measure_energy(self):
+        self.client.post("/measure-energy", json={
+            "source": "gpu",
+            "duration": 1.0
+        })
+    
+    @task
+    def create_token(self):
+        self.client.post("/create-token", json={
+            "measurement": {"joules": 1000, "source": "gpu"},
+            "node_id": "test-node"
+        })
