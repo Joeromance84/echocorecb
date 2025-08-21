@@ -1,0 +1,32 @@
+# security/crypto_manager.py
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.exceptions import InvalidSignature
+import base64
+
+class CryptoManager:
+    def __init__(self):
+        self.private_key = ec.generate_private_key(ec.SECP384R1())
+        self.public_key = self.private_key.public_key()
+        
+    def sign_measurement(self, measurement_data: Dict) -> str:
+        """Sign measurement data with ECDSA"""
+        data_str = self._serialize_measurement(measurement_data)
+        signature = self.private_key.sign(
+            data_str.encode(),
+            ec.ECDSA(hashes.SHA256())
+        )
+        return base64.b64encode(signature).decode()
+    
+    def verify_signature(self, measurement_data: Dict, signature: str) -> bool:
+        """Verify measurement signature"""
+        try:
+            data_str = self._serialize_measurement(measurement_data)
+            self.public_key.verify(
+                base64.b64decode(signature),
+                data_str.encode(),
+                ec.ECDSA(hashes.SHA256())
+            )
+            return True
+        except InvalidSignature:
+            return False
