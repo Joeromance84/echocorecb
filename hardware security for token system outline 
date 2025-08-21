@@ -1,0 +1,19 @@
+# security/hsm_integration.py
+import boto3
+from botocore.exceptions import ClientError
+
+class HSMManager:
+    def __init__(self, kms_key_id: str):
+        self.kms_client = boto3.client('kms')
+        self.kms_key_id = kms_key_id
+        
+    def encrypt_sensitive_data(self, plaintext: str) -> str:
+        """Encrypt sensitive data using AWS KMS"""
+        try:
+            response = self.kms_client.encrypt(
+                KeyId=self.kms_key_id,
+                Plaintext=plaintext.encode()
+            )
+            return base64.b64encode(response['CiphertextBlob']).decode()
+        except ClientError as e:
+            raise HSMCryptoError(f"KMS encryption failed: {e}")
