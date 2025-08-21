@@ -1,0 +1,32 @@
+# caching/redis_manager.py
+import redis
+from redis.exceptions import RedisError
+import json
+from typing import Optional
+
+class RedisCacheManager:
+    def __init__(self, redis_url: str):
+        self.redis = redis.from_url(redis_url, retry_on_timeout=True)
+        
+    async def get_cached_energy_patterns(self, node_id: str) -> Optional[Dict]:
+        """Get cached energy patterns with fallback"""
+        try:
+            cached = self.redis.get(f"energy_patterns:{node_id}")
+            if cached:
+                return json.loads(cached)
+        except RedisError:
+            # Continue without cache on Redis failure
+            pass
+        return None
+        
+    async def cache_energy_patterns(self, node_id: str, patterns: Dict, ttl: int = 3600):
+        """Cache energy patterns with TTL"""
+        try:
+            self.redis.setex(
+                f"energy_patterns:{node_id}",
+                ttl,
+                json.dumps(patterns)
+            )
+        except RedisError:
+            # Cache failures shouldn't break the application
+            pass
