@@ -1,0 +1,285 @@
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <driver/adc.h>
+#include <driver/gpio.h>
+#include <driver/i2c.h>
+#include <esp_log.h>
+#include <esp_sleep.h>
+#include <nvs_flash.h>
+#include <esp_ble.h>
+#include <cbor.h>
+#include <math.h>
+
+// Hardware Configuration
+#define ADC_CHANNEL_VCAP ADC1_CHANNEL_0  // GPIO36
+#define GPIO_TEG_EN GPIO_NUM_25
+#define GPIO_MAIN_POWER_GATE GPIO_NUM_33
+#define I2C_MASTER_SCL_IO GPIO_NUM_22
+#define I2C_MASTER_SDA_IO GPIO_NUM_21
+#define AD5242_ADDR 0x2C
+#define V_MAX 2.55f
+#define V_SAFE_ON 2.25f
+#define V_TX_MIN 2.10f
+#define V_SLEEP_HARD 1.80f
+#define CAPACITANCE_F 1.0f
+#define PROBE_WINDOW_MIN_MS 100
+#define PROBE_WINDOW_MAX_MS 500
+#define CONFIRM_DURATION_MS 5000
+#define T_BASE 3600 * 1000  // 1 hour
+#define K_BACKOFF 5.0f
+#define MPPT_RATIO_MIN 0.4f
+#define MPPT_RATIO_MAX 0.6f
+#define KALMAN_Q 0.01f
+#define KALMAN_R 0.05f
+#define ADC_NOISE 0.002f  // 2 mV
+#define K_PROBE 100.0f    // Probe duration scaling
+#define EPSILON 0.01f     // Avoid division by zero
+
+static const char *TAG = "ResonantNode";
+static float vcap = 0.0f, slope_mVs = 0.0f, best_mppt_ratio = 0.5f;
+static bool teg_enabled = false;
+static enum { SEARCH, TRACK, CONFIRM } mppt_state = SEARCH;
+static float kalman_x[2] = {2.0f, 0.0f};  // [Vcap, slope_mVs]
+static float kalman_P[2][2] = {{0.1f, 0.0f}, {0.0f, 0.1f}};  // Covariance
+
+static float read_vcap(void) {
+    int adc = adc1_get_raw(ADC_CHANNEL_VCAP);
+    return (adc / 4095.0f) * 3.3f * 2.0f;  // 2:1 divider
+}
+
+static void kalman_predict(float dt) {
+    // F = [1 dt; 0 1]
+    float x0 = kalman_x[0] + dt * kalman_x[1];
+    float x1 = kalman_x[1];
+    kalman_x[0] = x0;
+    kalman_x[1] = x1;
+    // P = F*P*F^T + Q
+    float P00 = kalman_P[0][0] + dt * (kalman_P[1][0] + kalman_P[0][1]) + dt * dt * kalman_P[1][1] + KALMAN_Q;
+    float P01 = kalman_P[0][1] + dt * kalman_P[1][1];
+    float P10 = kalman_P[1][0] + dt * kalman_P[1][1];
+    float P11 = kalman_P[1][1] + KALMAN_Q;
+    kalman_P[0][0] = P00; kalman_P[0][1] = P01;
+    kalman_P[1][0] = P10; kalman_P[1][1] = P11;
+}
+
+static void kalman_update(float V_meas) {
+    // y = V_meas - x0
+    float y = V_meas - kalman_x[0];
+    // K = P * H^T * (H*P*H^T + R)^{-1}, H=[1 0]
+    float S = kalman_P[0][0] + KALMAN_R;
+    float K0 = kalman_P[0][0] / S;
+    float K1 = kalman_P[1][0] / S;
+    // x += K*y
+    kalman_x[0] += K0 * y;
+    kalman_x[1] += K1 * y;
+    // P = (I - K*H) * P
+    float P00 = (1 - K0) * kalman_P[0][0];
+    float P01 = (1 - K0) * kalman_P[0][1];
+    float P10 = kalman_P[1][0] - K1 * kalman_P[0][0];
+    float P11 = kalman_P[1][1] - K1 * kalman_P[0][1];
+    kalman_P[0][0] = P00; kalman_P[0][1] = P01;
+    kalman_P[1][0] = P10; kalman_P[1][1] = P11;
+}
+
+static void enable_teg(bool enable) {
+    gpio_set_level(GPIO_TEG_EN, enable ? 1 : 0);
+    teg_enabled = enable;
+}
+
+static void set_mppt_ratio(float ratio) {
+    uint8_t value = (uint8_t)(255 * (ratio - MPPT_RATIO_MIN) / (MPPT_RATIO_MAX - MPPT_RATIO_MIN));
+    uint8_t data[2] = {0x00, value};
+    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (AD5242_ADDR << 1) | I2C_MASTER_WRITE, true);
+    i2c_master_write(cmd, data, 2, true);
+    i2c_master_stop(cmd);
+    if (i2c_master_cmd_begin(I2C_NUM_0, cmd, 1000 / portTICK_PERIOD_MS) != ESP_OK) {
+        ESP_LOGE(TAG, "I2C error setting MPPT ratio");
+    }
+    i2c_cmd_link_delete(cmd);
+}
+
+static void save_state(void) {
+    nvs_handle_t nvs;
+    nvs_open("node_state", NVS_READWRITE, &nvs);
+    nvs_set_f32(nvs, "vcap", vcap);
+    nvs_set_f32(nvs, "slope_mVs", slope_mVs);
+    nvs_set_f32(nvs, "mppt_ratio", best_mppt_ratio);
+    nvs_set_u8(nvs, "mppt_state", mppt_state);
+    nvs_commit(nvs);
+    nvs_close(nvs);
+}
+
+static void load_state(void) {
+    nvs_handle_t nvs;
+    if (nvs_open("node_state", NVS_READONLY, &nvs) == ESP_OK) {
+        nvs_get_f32(nvs, "vcap", &vcap);
+        nvs_get_f32(nvs, "slope_mVs", &slope_mVs);
+        nvs_get_f32(nvs, "mppt_ratio", &best_mppt_ratio);
+        uint8_t state;
+        nvs_get_u8(nvs, "mppt_state", &state);
+        mppt_state = (enum { SEARCH, TRACK, CONFIRM })state;
+        nvs_close(nvs);
+    }
+}
+
+static void enter_deep_sleep(void) {
+    ESP_LOGI(TAG, "Deep sleep. Vcap: %.2f V", vcap);
+    save_state();
+    enable_teg(false);
+    gpio_set_level(GPIO_MAIN_POWER_GATE, 0);
+    esp_deep_sleep_start();
+}
+
+static float predict_energy_gain(float slope, float probe_ms) {
+    float V_pred = vcap + (slope * probe_ms / 1000.0f) / 1000.0f;
+    return 0.5f * CAPACITANCE_F * (V_pred * V_pred - vcap * vcap);
+}
+
+static float get_probe_ms(float slope, float noise) {
+    return fmin(PROBE_WINDOW_MAX_MS, fmax(PROBE_WINDOW_MIN_MS, PROBE_WINDOW_MIN_MS + K_PROBE * noise / (fabs(slope) + EPSILON)));
+}
+
+static float probe_teg(void) {
+    float step = (mppt_state == SEARCH) ? 0.05f : 0.01f;
+    float ratios[3] = {best_mppt_ratio, best_mppt_ratio + step, best_mppt_ratio - step};
+    float slopes[3];
+    float probe_ms = get_probe_ms(slope_mVs, ADC_NOISE);
+    for (int i = 0; i < 3; i++) {
+        if (ratios[i] < MPPT_RATIO_MIN || ratios[i] > MPPT_RATIO_MAX) {
+            slopes[i] = -1e6;
+            continue;
+        }
+        if (predict_energy_gain(slope_mVs, probe_ms) < 0.015f) {
+            slopes[i] = -1e6;  // Skip if energy loss exceeds 15 mJ
+            continue;
+        }
+        set_mppt_ratio(ratios[i]);
+        enable_teg(true);
+        vTaskDelay((int)probe_ms / portTICK_PERIOD_MS);
+        float v_start = read_vcap();
+        kalman_predict(probe_ms / 1000.0f);
+        kalman_update(v_start);
+        vTaskDelay((int)probe_ms / portTICK_PERIOD_MS);
+        float v_end = read_vcap();
+        kalman_update(v_end);
+        slopes[i] = kalman_x[1];
+    }
+    int best_idx = slopes[0] > slopes[1] ? (slopes[0] > slopes[2] ? 0 : 2) : (slopes[1] > slopes[2] ? 1 : 2);
+    best_mppt_ratio = ratios[best_idx];
+    set_mppt_ratio(best_mppt_ratio);
+    return slopes[best_idx];
+}
+
+void app_main(void) {
+    nvs_flash_init();
+    load_state();
+    adc1_config_width(ADC_WIDTH_BIT_12);
+    adc1_config_channel_atten(ADC_CHANNEL_VCAP, ADC_ATTEN_DB_11);
+    gpio_set_direction(GPIO_TEG_EN, GPIO_MODE_OUTPUT);
+    gpio_set_direction(GPIO_MAIN_POWER_GATE, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_MAIN_POWER_GATE, 1);
+    i2c_config_t i2c_conf = {
+        .mode = I2C_MODE_MASTER,
+        .sda_io_num = I2C_MASTER_SDA_IO,
+        .scl_io_num = I2C_MASTER_SCL_IO,
+        .sda_pullup_en = GPIO_PULLUP_ENABLE,
+        .scl_pullup_en = GPIO_PULLUP_ENABLE,
+        .master.clk_speed = 100000
+    };
+    i2c_param_config(I2C_NUM_0, &i2c_conf);
+    i2c_driver_install(I2C_NUM_0, I2C_MODE_MASTER, 0, 0, 0);
+
+    esp_ble_adv_params_t adv_params = {
+        .adv_int_min = 0x20, .adv_int_max = 0x40,
+        .adv_type = ADV_TYPE_NONCONN_IND,
+        .own_addr_type = BLE_OWN_ADDR_PUBLIC,
+        .channel_map = ADV_CHNL_ALL,
+        .adv_filter_policy = ADV_FILTER_ALLOW_ALL,
+    };
+    uint8_t adv_data[16];
+    cbor_stream_t stream;
+    cbor_init(&stream, adv_data, sizeof(adv_data));
+
+    while (1) {
+        vcap = read_vcap();
+        kalman_predict(ULP_SAMPLE_MS / 1000.0f);
+        kalman_update(vcap);
+        vcap = kalman_x[0];
+        slope_mVs = kalman_x[1];
+
+        if (vcap <= V_SLEEP_HARD) {
+            enter_deep_sleep();
+        }
+
+        // Adaptive Granularity MPPT
+        switch (mppt_state) {
+            case SEARCH:
+                slope_mVs = probe_teg();
+                mppt_state = slope_mVs > 0.5f ? TRACK : SEARCH;
+                break;
+            case TRACK:
+                if (fabs(slope_mVs) < 0.1f) {
+                    mppt_state = CONFIRM;
+                    break;
+                }
+                float probe_ms = get_probe_ms(slope_mVs, ADC_NOISE);
+                if (predict_energy_gain(slope_mVs, probe_ms) < 0.015f) break;
+                float delta = (rand() % 2 ? 0.01f : -0.01f);
+                if (best_mppt_ratio + delta >= MPPT_RATIO_MIN && best_mppt_ratio + delta <= MPPT_RATIO_MAX) {
+                    float old_slope = slope_mVs, old_ratio = best_mppt_ratio;
+                    set_mppt_ratio(best_mppt_ratio + delta);
+                    vTaskDelay((int)probe_ms / portTICK_PERIOD_MS);
+                    float v_start = read_vcap();
+                    kalman_predict(probe_ms / 1000.0f);
+                    kalman_update(v_start);
+                    vTaskDelay((int)probe_ms / portTICK_PERIOD_MS);
+                    kalman_update(read_vcap());
+                    slope_mVs = kalman_x[1];
+                    if (slope_mVs < old_slope) set_mppt_ratio(old_ratio);
+                    else best_mppt_ratio += delta;
+                }
+                mppt_state = slope_mVs > 0.3f ? TRACK : SEARCH;
+                break;
+            case CONFIRM:
+                enable_teg(true);
+                vTaskDelay(CONFIRM_DURATION_MS / portTICK_PERIOD_MS);
+                float v_start = read_vcap();
+                kalman_predict(PROBE_WINDOW_MIN_MS / 1000.0f);
+                kalman_update(v_start);
+                vTaskDelay(PROBE_WINDOW_MIN_MS / portTICK_PERIOD_MS);
+                kalman_update(read_vcap());
+                slope_mVs = kalman_x[1];
+                mppt_state = slope_mVs > 0.3f ? CONFIRM : SEARCH;
+                break;
+        }
+
+        if (vcap >= V_TX_MIN && predict_energy_gain(slope_mVs, 20) >= 0.015f) {
+            float health = fmax(0, fmin(1, (vcap - V_SLEEP_HARD) / (V_SAFE_ON - V_SLEEP_HARD)));
+            uint32_t backoff_ms = (uint32_t)(T_BASE * exp(-K_BACKOFF * health));
+            cbor_clear(&stream);
+            cbor_map(&stream);
+            cbor_map_key(&stream, "V"); cbor_float(&stream, vcap);
+            cbor_map_key(&stream, "S"); cbor_int(&stream, (int8_t)slope_mVs);
+            cbor_map_key(&stream, "R"); cbor_float(&stream, best_mppt_ratio);
+            cbor_map_key(&stream, "F"); cbor_int(&stream, 0);
+            cbor_map_end(&stream);
+            esp_ble_gap_config_adv_data_raw(adv_data, stream.pos);
+            for (int i = 0; i < 3; i++) {
+                esp_ble_gap_start_advertising(&adv_params);
+                vTaskDelay((20 + (rand() % 60)) / portTICK_PERIOD_MS);
+            }
+            esp_ble_gap_stop_advertising();
+            ESP_LOGI(TAG, "TX: Vcap=%.2fV, Slope=%.2fmV/s, MPPT=%.2f, Backoff=%dms", vcap, slope_mVs, best_mppt_ratio, backoff_ms);
+            vTaskDelay(backoff_ms / portTICK_PERIOD_MS);
+        } else {
+            vTaskDelay((vcap >= V_SAFE_ON && slope_mVs > 0.5f ? 15000 : T_BASE) / portTICK_PERIOD_MS);
+        }
+
+        if (vcap >= V_MAX) {
+            enable_teg(false);
+            mppt_state = CONFIRM;
+        }
+    }
+}
