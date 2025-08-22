@@ -1,0 +1,176 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from dataclasses import dataclass
+from enum import Enum
+
+@dataclass
+class NodeConfig:
+    C_F: float = 1.0
+    V_SAFE_ON: float = 2.25
+    V_TX_MIN: float = 2.10
+    V_SLEEP_HARD: float = 1.80
+    V_MAX: float = 2.55
+    PROBE_WINDOW_MIN_S: float = 0.1
+    PROBE_WINDOW_MAX_S: float = 0.5
+    CONFIRM_DURATION_S: float = 5.0
+    E_TX_J: float = 0.009
+    E_SENSE_J: float = 0.005
+    P_SLEEP_W: float = 23e-6
+    T_BASE: float = 3600.0
+    K_BACKOFF: float = 5.0
+    MPPT_RATIO_MIN: float = 0.4
+    MPPT_RATIO_MAX: float = 0.6
+    ESR_OHM: float = 0.05
+    TAU_S: float = 300.0
+    KALMAN_Q: float = 0.01
+    KALMAN_R: float = 0.05
+    ADC_NOISE: float = 0.002
+    K_PROBE: float = 100.0
+    EPSILON: float = 0.01
+
+class MPPTState(Enum):
+    SEARCH = 1
+    TRACK = 2
+    CONFIRM = 3
+
+class ResonantNode:
+    def __init__(self, config: NodeConfig):
+        self.config = config
+        self.Vcap = 2.0
+        self.slope_mVs = 0.0
+        self.teg_enabled = False
+        self.mppt_ratio = 0.5
+        self.mppt_state = MPPTState.SEARCH
+        self.P_teg = 0.0
+        self.kalman_x = np.array([2.0, 0.0])
+        self.kalman_P = np.array([[0.1, 0.0], [0.0, 0.1]])
+        self.log = []
+
+    def teg_power(self, t: float) -> float:
+        base = 0.15e-3
+        noise = np.random.normal(0, 0.1)
+        diurnal = 1 + 0.4 * np.sin(2 * np.pi * t / 7200)
+        P_available = max(0, base * (1 + noise) * diurnal)
+        self.P_teg += (P_available - self.P_teg) / self.config.TAU_S
+        efficiency = 1 - 4 * (self.mppt_ratio - 0.5)**2
+        return self.P_teg * efficiency
+
+    def kalman_predict(self, dt: float):
+        F = np.array([[1, dt], [0, 1]])
+        self.kalman_x = F @ self.kalman_x
+        self.kalman_P = F @ self.kalman_P @ F.T + np.array([[self.config.KALMAN_Q, 0], [0, self.config.KALMAN_Q]])
+
+    def kalman_update(self, V_meas: float):
+        H = np.array([[1, 0]])
+        y = V_meas - self.kalman_x[0]
+        S = H @ self.kalman_P @ H.T + self.config.KALMAN_R
+        K = self.kalman_P @ H.T / S
+        self.kalman_x += K * y
+        self.kalman_P = (np.eye(2) - K @ H) @ self.kalman_P
+
+    def predict_energy_gain(self, slope: float, probe_s: float) -> float:
+        V_pred = self.Vcap + (slope * probe_s / 1000.0) / 1000.0
+        return 0.5 * self.config.C_F * (V_pred**2 - self.Vcap**2)
+
+    def get_probe_s(self, slope: float) -> float:
+        return min(self.config.PROBE_WINDOW_MAX_S, max(self.config.PROBE_WINDOW_MIN_S, 
+               self.config.PROBE_WINDOW_MIN_S + self.config.K_PROBE * self.config.ADC_NOISE / (abs(slope) + self.config.EPSILON)))
+
+    def probe_teg(self, t: float) -> float:
+        step = 0.05 if self.mppt_state == MPPTState.SEARCH else 0.01
+        ratios = [self.mppt_ratio, self.mppt_ratio + step, self.mppt_ratio - step]
+        slopes = []
+        probe_s = self.get_probe_s(self.slope_mVs)
+        for r in ratios:
+            if r < self.config.MPPT_RATIO_MIN or r > self.config.MPPT_RATIO_MAX: continue
+            if self.predict_energy_gain(self.slope_mVs, probe_s) < 0.015: continue
+            self.mppt_ratio = r
+            self.teg_enabled = True
+            v_start = self.Vcap
+            self.update(t, probe_s)
+            slopes.append(self.slope_mVs)
+        self.mppt_ratio = ratios[np.argmax(slopes)] if slopes else self.mppt_ratio
+        return max(slopes) if slopes else self.slope_mVs
+
+    def update(self, t: float, dt: float):
+        P_harvest = self.teg_power(t) if self.teg_enabled else 0.0
+        P_total = P_harvest - self.config.P_SLEEP_W
+        I_load = P_total / max(self.Vcap, 0.1)
+        V_drop = I_load * self.config.ESR_OHM
+        dV_dt = ((P_total - V_drop * I_load) / max(self.Vcap, 0.1)) / self.config.C_F
+        self.Vcap += dV_dt * dt
+        self.Vcap = np.clip(self.Vcap, 0, self.config.V_MAX)
+        self.kalman_predict(dt)
+        self.kalman_update(self.Vcap + np.random.normal(0, self.config.ADC_NOISE))
+        self.Vcap = self.kalman_x[0]
+        self.slope_mVs = self.kalman_x[1]
+
+        if self.Vcap <= self.config.V_SLEEP_HARD:
+            self.teg_enabled = False
+            self.mppt_state = MPPTState.SEARCH
+        elif self.Vcap >= self.config.V_MAX:
+            self.teg_enabled = False
+            self.mppt_state = MPPTState.CONFIRM
+        else:
+            if self.mppt_state == MPPTState.SEARCH:
+                self.slope_mVs = self.probe_teg(t)
+                self.mppt_state = MPPTState.TRACK if self.slope_mVs > 0.5 else MPPTState.SEARCH
+            elif self.mppt_state == MPPTState.TRACK:
+                if abs(self.slope_mVs) < 0.1:
+                    self.mppt_state = MPPTState.CONFIRM
+                else:
+                    probe_s = self.get_probe_s(self.slope_mVs)
+                    if self.predict_energy_gain(self.slope_mVs, probe_s) >= 0.015:
+                        delta = 0.01 if np.random.rand() > 0.5 else -0.01
+                        if self.mppt_ratio + delta >= self.config.MPPT_RATIO_MIN and self.mppt_ratio + delta <= self.config.MPPT_RATIO_MAX:
+                            old_ratio = self.mppt_ratio
+                            self.mppt_ratio += delta
+                            v_start = self.Vcap
+                            self.update(t, probe_s)
+                            if self.slope_mVs < 0.3: self.mppt_ratio = old_ratio
+                    self.mppt_state = MPPTState.TRACK if self.slope_mVs > 0.3 else MPPTState.SEARCH
+            elif self.mppt_state == MPPTState.CONFIRM:
+                self.teg_enabled = True
+                self.update(t, self.config.CONFIRM_DURATION_S)
+                self.mppt_state = MPPTState.CONFIRM if self.slope_mVs > 0.3 else MPPTState.SEARCH
+
+        if self.Vcap >= self.config.V_TX_MIN and self.predict_energy_gain(self.slope_mVs, 0.02) >= 0.015:
+            health = max(0, min(1, (self.Vcap - self.config.V_SLEEP_HARD) / (self.config.V_SAFE_ON - self.config.V_SLEEP_HARD)))
+            backoff_s = self.config.T_BASE * np.exp(-self.config.K_BACKOFF * health)
+            self.Vcap -= np.sqrt(2 * (self.config.E_TX_J + self.config.E_SENSE_J) / self.config.C_F)
+            self.log.append((t, self.Vcap, self.slope_mVs, self.teg_enabled, self.mppt_state.value, self.mppt_ratio, health))
+
+def simulate_node(config, T_sim=72*3600, dt=0.2):
+    node = ResonantNode(config)
+    t = np.arange(0, T_sim, dt)
+    for ti in t:
+        node.update(ti, dt)
+    return node.log
+
+def plot_simulation(log):
+    log = np.array(log)
+    plt.figure(figsize=(12, 10))
+    plt.subplot(4, 1, 1)
+    plt.plot(log[:, 0] / 3600, log[:, 1], label="Vcap (V)")
+    plt.ylabel("Vcap (V)")
+    plt.legend()
+    plt.subplot(4, 1, 2)
+    plt.plot(log[:, 0] / 3600, log[:, 2], label="Slope (mV/s)")
+    plt.ylabel("Slope (mV/s)")
+    plt.legend()
+    plt.subplot(4, 1, 3)
+    plt.plot(log[:, 0] / 3600, log[:, 5], label="MPPT Ratio")
+    plt.ylabel("MPPT Ratio")
+    plt.legend()
+    plt.subplot(4, 1, 4)
+    plt.plot(log[:, 0] / 3600, log[:, 6], label="Health Metric")
+    plt.xlabel("Time (hours)")
+    plt.ylabel("Health")
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+if __name__ == "__main__":
+    config = NodeConfig()
+    log = simulate_node(config)
+    plot_simulation(log)
