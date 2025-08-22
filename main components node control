@@ -1,0 +1,66 @@
+#ifndef NODE_CONTROL_H
+#define NODE_CONTROL_H
+
+#include <stdbool.h>
+#include "esp_err.h"
+
+// Kalman Filter Structure
+typedef struct {
+    float x[2];      // State vector: [Vcap, slope_mVs]
+    float P[2][2];   // Covariance matrix
+    float Q;         // Process noise covariance
+    float R;         // Measurement noise covariance
+} kalman_filter_t;
+
+// MPPT State Machine
+typedef enum {
+    MPPT_STATE_SEARCH,
+    MPPT_STATE_TRACK,
+    MPPT_STATE_CONFIRM
+} mppt_state_t;
+
+// Node Controller Structure
+typedef struct {
+    // Configuration
+    float V_safe_on;
+    float V_tx_min;
+    float V_sleep_hard;
+    float V_max;
+    float capacitance;
+    float mppt_ratio_min;
+    float mppt_ratio_max;
+    float probe_window_min_ms;
+    float probe_window_max_ms;
+    float confirm_duration_ms;
+    float K_probe;
+    float epsilon;
+    
+    // State
+    float Vcap;
+    float slope_mVs;
+    float best_mppt_ratio;
+    mppt_state_t mppt_state;
+    kalman_filter_t kf;
+    
+    // Energy prediction
+    float E_tx;
+    float E_sense;
+    float P_sleep;
+} node_controller_t;
+
+// Initialize the node controller
+esp_err_t node_controller_init(node_controller_t *ctrl);
+
+// Kalman filter functions
+void kalman_init(kalman_filter_t *kf, float Q, float R);
+void kalman_predict(kalman_filter_t *kf, float dt);
+void kalman_update(kalman_filter_t *kf, float measurement);
+
+// Adaptive probe functions
+float calculate_probe_duration(const node_controller_t *ctrl);
+float predict_energy_gain(const node_controller_t *ctrl, float probe_ms);
+
+// MPPT state machine execution
+mppt_state_t execute_mppt_state_machine(node_controller_t *ctrl, bool *teg_should_be_enabled);
+
+#endif // NODE_CONTROL_H
