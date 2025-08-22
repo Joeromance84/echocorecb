@@ -1,0 +1,30 @@
+#include "soc/rtc_cntl_reg.h"
+#include "soc/soc_ulp.h"
+
+    .bss
+    .global vcap_adc_val
+vcap_adc_val: .long 0
+
+    .text
+    .global entry
+entry:
+    adc r0, 0, 1  // Channel 0, atten 11 dB
+    move r1, vcap_adc_val
+    st r0, r1, 0
+    move r2, (2250 * 4095 / 3300 / 2)  // V_SAFE_ON
+    sub r2, r2, r0
+    jump wake_main, ov
+    move r2, (1800 * 4095 / 3300 / 2)  // V_SLEEP_HARD
+    sub r2, r0, r2
+    jump cut_main, ov
+    halt
+
+wake_main:
+    wake
+    halt
+
+cut_main:
+    move r0, 33  // GPIO33
+    move r1, 0
+    write r0, r1
+    halt
