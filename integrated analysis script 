@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""
+Quick-start analysis script for the first Resilience Report.
+Generates patch proposals and runs initial validation.
+"""
+import json
+import asyncio
+import logging
+from monte_carlo_simulator.patcher import FirmwarePatcher
+from monte_carlo_simulator.config import NodeConfig
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+async def main():
+    logger.info("🔍 Analyzing initial Resilience Report...")
+    
+    # Load the base configuration
+    base_config = NodeConfig()
+    
+    # Initialize patcher
+    patcher = FirmwarePatcher(base_config)
+    
+    # Generate patch proposals based on report
+    report_path = "results/resilience_report.json"
+    proposals = patcher.generate_patch_proposals(report_path)
+    
+    logger.info(f"Generated {len(proposals)} patch proposals:")
+    for i, proposal in enumerate(proposals, 1):
+        logger.info(f"  {i}. {proposal['patch_id']}: {proposal['description']} (Priority: {proposal['priority']})")
+    
+    # Apply and validate the top high-priority patch
+    high_priority = [p for p in proposals if p['priority'] == 'high']
+    
+    if high_priority:
+        top_patch = high_priority[0]
+        logger.info(f"🔧 Applying top patch: {top_patch['patch_id']}")
+        
+        patch_result, patched_config = patcher.apply_patch(
+            top_patch['patch_id'], top_patch['parameters']
+        )
+        
+        # Validate the patch
+        logger.info("🧪 Validating patch with 1000 simulation runs...")
+        validation_report = await patcher.validate_patch(patched_config, num_runs=1000)
+        
+        # Calculate improvement
+        with open(report_path, 'r') as f:
+            original_report = json.load(f)
+        
+        improvement = ((validation_report['pass_rate'] - original_report['pass_rate']) / 
+                      original_report['pass_rate']) * 100
+        
+        patch_result.improvement = improvement
+        patch_result.validated = True
+        
+        logger.info(f"✅ Patch validation complete: {improvement:+.1f}% improvement in pass rate")
+        
+        # Save patch result
+        patch_data = {
+            "patch_id": patch_result.patch_id,
+            "improvement": improvement,
+            "parameters": patch_result.parameters,
+            "original_value": patch_result.original_value,
+            "new_value": patch_result.new_value
+        }
+        
+        with open("results/patch_results.json", 'w') as f:
+            json.dump(patch_data, f, indent=2)
+        
+        logger.info("💾 Patch results saved to results/patch_results.json")
+    
+    logger.info("Analysis complete. Ready for AI entity review.")
+
+if __name__ == "__main__":
+    asyncio.run(main())
