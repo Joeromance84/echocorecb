@@ -1,0 +1,188 @@
+#include "node_control.h"
+#include <math.h>
+#include "esp_log.h"
+
+static const char *TAG = "NodeControl";
+
+// Initialize Kalman filter
+void kalman_init(kalman_filter_t *kf, float Q, float R) {
+    kf->x[0] = 2.0f; // Initial Vcap estimate
+    kf->x[1] = 0.0f; // Initial slope estimate
+    kf->P[0][0] = 0.1f;
+    kf->P[0][1] = 0.0f;
+    kf->P[1][0] = 0.0f;
+    kf->P[1][1] = 0.1f;
+    kf->Q = Q;
+    kf->R = R;
+}
+
+// Kalman prediction step
+void kalman_predict(kalman_filter_t *kf, float dt) {
+    // State transition matrix F = [[1, dt], [0, 1]]
+    float x0 = kf->x[0] + dt * kf->x[1];
+    float x1 = kf->x[1];
+    
+    // Covariance prediction: P = F * P * F^T + Q
+    float P00 = kf->P[0][0] + dt * (kf->P[1][0] + kf->P[0][1]) + dt * dt * kf->P[1][1] + kf->Q;
+    float P01 = kf->P[0][1] + dt * kf->P[1][1];
+    float P10 = kf->P[1][0] + dt * kf->P[1][1];
+    float P11 = kf->P[1][1] + kf->Q;
+    
+    // Update state and covariance
+    kf->x[0] = x0;
+    kf->x[1] = x1;
+    kf->P[0][0] = P00;
+    kf->P[0][1] = P01;
+    kf->P[1][0] = P10;
+    kf->P[1][1] = P11;
+}
+
+// Kalman update step
+void kalman_update(kalman_filter_t *kf, float measurement) {
+    // Measurement matrix H = [1, 0]
+    float y = measurement - kf->x[0]; // Innovation
+    
+    // Innovation covariance S = H * P * H^T + R
+    float S = kf->P[0][0] + kf->R;
+    
+    // Kalman gain K = P * H^T * S^(-1)
+    float K0 = kf->P[0][0] / S;
+    float K1 = kf->P[1][0] / S;
+    
+    // State update
+    kf->x[0] += K0 * y;
+    kf->x[1] += K1 * y;
+    
+    // Covariance update
+    float P00 = (1 - K0) * kf->P[0][0];
+    float P01 = (1 - K0) * kf->P[0][1];
+    float P10 = kf->P[1][0] - K1 * kf->P[0][0];
+    float P11 = kf->P[1][1] - K1 * kf->P[0][1];
+    
+    kf->P[0][0] = P00;
+    kf->P[0][1] = P01;
+    kf->P[1][0] = P10;
+    kf->P[1][1] = P11;
+}
+
+// Calculate adaptive probe duration based on current slope and noise
+float calculate_probe_duration(const node_controller_t *ctrl) {
+    float noise_estimate = sqrtf(ctrl->kf.P[0][0]); // Use sqrt of Vcap variance
+    float slope_magnitude = fabsf(ctrl->slope_mVs);
+    
+    // Adaptive formula: probe_ms = min_max + K * noise / (slope + epsilon)
+    float probe_ms = ctrl->probe_window_min_ms + 
+                    ctrl->K_probe * noise_estimate / (slope_magnitude + ctrl->epsilon);
+    
+    // Constrain to minimum and maximum values
+    if (probe_ms < ctrl->probe_window_min_ms) {
+        return ctrl->probe_window_min_ms;
+    } else if (probe_ms > ctrl->probe_window_max_ms) {
+        return ctrl->probe_window_max_ms;
+    }
+    return probe_ms;
+}
+
+// Predict energy gain from a probe operation
+float predict_energy_gain(const node_controller_t *ctrl, float probe_ms) {
+    float V_pred = ctrl->Vcap + (ctrl->slope_mVs * probe_ms / 1000.0f) / 1000.0f;
+    return 0.5f * ctrl->capacitance * (V_pred * V_pred - ctrl->Vcap * ctrl->Vcap);
+}
+
+// Initialize node controller with default parameters
+esp_err_t node_controller_init(node_controller_t *ctrl) {
+    if (ctrl == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    // Set default configuration
+    ctrl->V_safe_on = 2.25f;
+    ctrl->V_tx_min = 2.10f;
+    ctrl->V_sleep_hard = 1.80f;
+    ctrl->V_max = 2.55f;
+    ctrl->capacitance = 1.0f;
+    ctrl->mppt_ratio_min = 0.4f;
+    ctrl->mppt_ratio_max = 0.6f;
+    ctrl->probe_window_min_ms = 100.0f;
+    ctrl->probe_window_max_ms = 500.0f;
+    ctrl->confirm_duration_ms = 5000.0f;
+    ctrl->K_probe = 100.0f;
+    ctrl->epsilon = 0.01f;
+    
+    // Initialize state
+    ctrl->Vcap = 2.0f;
+    ctrl->slope_mVs = 0.0f;
+    ctrl->best_mppt_ratio = 0.5f;
+    ctrl->mppt_state = MPPT_STATE_SEARCH;
+    
+    // Initialize Kalman filter
+    kalman_init(&ctrl->kf, 0.01f, 0.05f);
+    
+    // Energy parameters
+    ctrl->E_tx = 0.009f;
+    ctrl->E_sense = 0.005f;
+    ctrl->P_sleep = 23e-6f;
+    
+    ESP_LOGI(TAG, "Node controller initialized");
+    return ESP_OK;
+}
+
+// Execute MPPT state machine
+mppt_state_t execute_mppt_state_machine(node_controller_t *ctrl, bool *teg_should_be_enabled) {
+    float probe_ms;
+    float energy_gain;
+    
+    switch (ctrl->mppt_state) {
+        case MPPT_STATE_SEARCH:
+            // Coarse search for maximum power point
+            probe_ms = calculate_probe_duration(ctrl);
+            energy_gain = predict_energy_gain(ctrl, probe_ms);
+            
+            if (energy_gain > ctrl->E_sense) {
+                // Perform search pattern and update best_mppt_ratio
+                // This would involve actually probing different ratios
+                *teg_should_be_enabled = true;
+                
+                if (ctrl->slope_mVs > 0.5f) {
+                    ctrl->mppt_state = MPPT_STATE_TRACK;
+                    ESP_LOGI(TAG, "Transition to TRACK state");
+                }
+            } else {
+                *teg_should_be_enabled = false;
+            }
+            break;
+            
+        case MPPT_STATE_TRACK:
+            // Fine tracking around current best point
+            if (fabsf(ctrl->slope_mVs) < 0.1f) {
+                ctrl->mppt_state = MPPT_STATE_CONFIRM;
+                ESP_LOGI(TAG, "Transition to CONFIRM state");
+                break;
+            }
+            
+            probe_ms = calculate_probe_duration(ctrl);
+            energy_gain = predict_energy_gain(ctrl, probe_ms);
+            
+            if (energy_gain > ctrl->E_sense) {
+                // Perform hill-climbing perturbation
+                *teg_should_be_enabled = true;
+            } else {
+                *teg_should_be_enabled = false;
+                ctrl->mppt_state = MPPT_STATE_SEARCH;
+                ESP_LOGI(TAG, "Transition to SEARCH state");
+            }
+            break;
+            
+        case MPPT_STATE_CONFIRM:
+            // Confirm stability at current operating point
+            *teg_should_be_enabled = true;
+            
+            if (ctrl->slope_mVs < 0.3f) {
+                ctrl->mppt_state = MPPT_STATE_SEARCH;
+                ESP_LOGI(TAG, "Transition to SEARCH state");
+            }
+            break;
+    }
+    
+    return ctrl->mppt_state;
+}
