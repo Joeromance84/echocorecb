@@ -1,0 +1,165 @@
+"""
+FirmwarePatcher Module
+Applies targeted patches to the simulated node firmware based on failure analysis.
+"""
+import json
+import logging
+from typing import Dict, Any, List
+from dataclasses import dataclass
+from .simulator import ResonantNodeSimulator, NodeConfig
+from .runner import SimulationRunner
+import asyncio
+
+logger = logging.getLogger(__name__)
+
+@dataclass
+class PatchResult:
+    patch_id: str
+    description: str
+    parameters: Dict[str, Any]
+    original_value: Any
+    new_value: Any
+    improvement: float  # Percentage improvement in pass rate
+    validated: bool
+
+class FirmwarePatcher:
+    def __init__(self, base_config: NodeConfig):
+        self.base_config = base_config
+        self.patch_registry = self._initialize_patch_registry()
+        self.applied_patches: List[PatchResult] = []
+
+    def _initialize_patch_registry(self) -> Dict[str, Any]:
+        """Registry of available patches and their application methods."""
+        return {
+            "vcap_bootstrap": self._apply_vcap_bootstrap,
+            "ble_retry_protocol": self._apply_ble_retry_protocol,
+            "mppt_energy_optimize": self._apply_mppt_energy_optimize,
+            "kalman_adaptive_tune": self._apply_kalman_adaptive_tune,
+            "tx_backoff_aggression": self._apply_tx_backoff_aggression,
+        }
+
+    def generate_patch_proposals(self, report_path: str) -> List[Dict]:
+        """Analyze resilience report and generate patch proposals."""
+        with open(report_path, 'r') as f:
+            report = json.load(f)
+        
+        proposals = []
+        failure_modes = report.get("failure_modes", {})
+        
+        # Proposal 1: VCAP Bootstrap for low-energy starts
+        if failure_modes.get("vcap_below_sleep_hard", 0) > 5.0:  # If >5% of failures
+            proposals.append({
+                "patch_id": "vcap_bootstrap",
+                "description": "Add low-energy bootstrap mode for cold starts",
+                "parameters": {"new_threshold": 1.7, "boot_delay_ms": 5000},
+                "priority": "high",
+                "expected_impact": "Reduces premature death on cold start"
+            })
+        
+        # Proposal 2: BLE Retry for connectivity issues
+        if failure_modes.get("ble_connection_failed", 0) > 3.0:
+            proposals.append({
+                "patch_id": "ble_retry_protocol",
+                "description": "Implement exponential backoff BLE retry protocol",
+                "parameters": {"max_attempts": 3, "backoff_base_ms": 100},
+                "priority": "medium",
+                "expected_impact": "Improves reliability in intermittent RF environments"
+            })
+        
+        # Proposal 3: MPPT Energy Optimization
+        if failure_modes.get("energy_budget_depleted", 0) > 8.0:
+            proposals.append({
+                "patch_id": "mppt_energy_optimize",
+                "description": "Optimize MPPT sampling frequency based on energy state",
+                "parameters": {"low_energy_sample_ms": 5000, "high_energy_sample_ms": 200},
+                "priority": "high",
+                "expected_impact": "Redces energy overhead of MPPT in low-energy states"
+            })
+        
+        # Proposal 4: Adaptive Kalman Tuning
+        if failure_modes.get("kalman_estimation_error", 0) > 10.0:
+            proposals.append({
+                "patch_id": "kalman_adaptive_tune",
+                "description": "Adaptive Kalman filter tuning based on noise estimation",
+                "parameters": {"Q_scale_factor": 0.1, "R_scale_factor": 2.0},
+                "priority": "medium",
+                "expected_impact": "Improves voltage estimation in noisy environments"
+            })
+        
+        # Proposal 5: TX Backoff Aggression
+        if failure_modes.get("insufficient_energy_for_tx", 0) > 15.0:
+            proposals.append({
+                "patch_id": "tx_backoff_aggression",
+                "description": "More aggressive TX backoff based on energy health",
+                "parameters": {"K_backoff": 8.0, "min_backoff_ms": 30000},
+                "priority": "medium",
+                "expected_impact": "Conserves energy by reducing TX attempts when energy is low"
+            })
+        
+        return proposals
+
+    def apply_patch(self, patch_id: str, parameters: Dict[str, Any]) -> PatchResult:
+        """Apply a specific patch to the configuration."""
+        if patch_id not in self.patch_registry:
+            raise ValueError(f"Unknown patch ID: {patch_id}")
+        
+        # Create a new config instance for patching
+        patched_config = NodeConfig(**self.base_config.__dict__)
+        
+        # Apply the patch
+        patch_method = self.patch_registry[patch_id]
+        original_value = patch_method(patched_config, parameters)
+        
+        result = PatchResult(
+            patch_id=patch_id,
+            description="",
+            parameters=parameters,
+            original_value=original_value,
+            new_value=getattr(patched_config, list(parameters.keys())[0]),
+            improvement=0.0,
+            validated=False
+        )
+        
+        return result, patched_config
+
+    def _apply_vcap_bootstrap(self, config: NodeConfig, params: Dict[str, Any]) -> Any:
+        """Apply vcap bootstrap patch."""
+        original = config.V_sleep_hard
+        config.V_sleep_hard = params.get("new_threshold", 1.7)
+        config.boot_delay_ms = params.get("boot_delay_ms", 5000)
+        return original
+
+    def _apply_ble_retry_protocol(self, config: NodeConfig, params: Dict[str, Any]) -> Any:
+        """Apply BLE retry patch."""
+        original = config.ble_max_attempts
+        config.ble_max_attempts = params.get("max_attempts", 3)
+        config.ble_backoff_base_ms = params.get("backoff_base_ms", 100)
+        return original
+
+    def _apply_mppt_energy_optimize(self, config: NodeConfig, params: Dict[str, Any]) -> Any:
+        """Apply MPPT energy optimization patch."""
+        original = config.mppt_sample_interval_low_ms
+        config.mppt_sample_interval_low_ms = params.get("low_energy_sample_ms", 5000)
+        config.mppt_sample_interval_high_ms = params.get("high_energy_sample_ms", 200)
+        return original
+
+    def _apply_kalman_adaptive_tune(self, config: NodeConfig, params: Dict[str, Any]) -> Any:
+        """Apply adaptive Kalman tuning patch."""
+        original = config.kalman_Q
+        config.kalman_Q *= params.get("Q_scale_factor", 0.1)
+        config.kalman_R *= params.get("R_scale_factor", 2.0)
+        return original
+
+    def _apply_tx_backoff_aggression(self, config: NodeConfig, params: Dict[str, Any]) -> Any:
+        """Apply TX backoff aggression patch."""
+        original = config.K_backoff
+        config.K_backoff = params.get("K_backoff", 8.0)
+        config.tx_min_backoff_ms = params.get("min_backoff_ms", 30000)
+        return original
+
+    async def validate_patch(self, patched_config: NodeConfig, num_runs: int = 1000) -> Dict[str, Any]:
+        """Validate a patch by running simulation with modified config."""
+        runner = SimulationRunner(num_runs=num_runs, config=patched_config)
+        await runner.run_monte_carlo()
+        report = runner.generate_report()
+        return report
