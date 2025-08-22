@@ -1,0 +1,88 @@
+// Add to top of resonant_node_main.c
+#define KALMAN_Q 0.01f
+#define KALMAN_R 0.05f
+#define ADC_NOISE 0.002f
+#define K_PROBE 100.0f
+#define EPSILON 0.01f
+#define PROBE_WINDOW_MIN_MS 100
+#define PROBE_WINDOW_MAX_MS 500
+static float kalman_x[2] = {2.0f, 0.0f};  // [Vcap, slope_mVs]
+static float kalman_P[2][2] = {{0.1f, 0.0f}, {0.0f, 0.1f}};
+
+// Add these functions
+static void kalman_predict(float dt) {
+    float x0 = kalman_x[0] + dt * kalman_x[1];
+    float x1 = kalman_x[1];
+    kalman_x[0] = x0;
+    kalman_x[1] = x1;
+    float P00 = kalman_P[0][0] + dt * (kalman_P[1][0] + kalman_P[0][1]) + dt * dt * kalman_P[1][1] + KALMAN_Q;
+    float P01 = kalman_P[0][1] + dt * kalman_P[1][1];
+    float P10 = kalman_P[1][0] + dt * kalman_P[1][1];
+    float P11 = kalman_P[1][1] + KALMAN_Q;
+    kalman_P[0][0] = P00; kalman_P[0][1] = P01;
+    kalman_P[1][0] = P10; kalman_P[1][1] = P11;
+}
+
+static void kalman_update(float V_meas) {
+    float y = V_meas - kalman_x[0];
+    float S = kalman_P[0][0] + KALMAN_R;
+    float K0 = kalman_P[0][0] / S;
+    float K1 = kalman_P[1][0] / S;
+    kalman_x[0] += K0 * y;
+    kalman_x[1] += K1 * y;
+    float P00 = (1 - K0) * kalman_P[0][0];
+    float P01 = (1 - K0) * kalman_P[0][1];
+    float P10 = kalman_P[1][0] - K1 * kalman_P[0][0];
+    float P11 = kalman_P[1][1] - K1 * kalman_P[0][1];
+    kalman_P[0][0] = P00; kalman_P[0][1] = P01;
+    kalman_P[1][0] = P10; kalman_P[1][1] = P11;
+}
+
+static float predict_energy_gain(float slope, float probe_ms) {
+    float V_pred = vcap + (slope * probe_ms / 1000.0f) / 1000.0f;
+    return 0.5f * CAPACITANCE_F * (V_pred * V_pred - vcap * vcap);
+}
+
+static float get_probe_ms(float slope) {
+    return fmin(PROBE_WINDOW_MAX_MS, fmax(PROBE_WINDOW_MIN_MS, 
+           PROBE_WINDOW_MIN_MS + K_PROBE * ADC_NOISE / (fabs(slope) + EPSILON)));
+}
+
+// Replace probe_teg() with:
+static float probe_teg(void) {
+    float step = (mppt_state == SEARCH) ? 0.05f : 0.01f;
+    float ratios[3] = {best_mppt_ratio, best_mppt_ratio + step, best_mppt_ratio - step};
+    float slopes[3];
+    float probe_ms = get_probe_ms(slope_mVs);
+    for (int i = 0; i < 3; i++) {
+        if (ratios[i] < MPPT_RATIO_MIN || ratios[i] > MPPT_RATIO_MAX) {
+            slopes[i] = -1e6;
+            continue;
+        }
+        if (predict_energy_gain(slope_mVs, probe_ms) < 0.015f) {
+            slopes[i] = -1e6;
+            continue;
+        }
+        set_mppt_ratio(ratios[i]);
+        enable_teg(true);
+        vTaskDelay((int)probe_ms / portTICK_PERIOD_MS);
+        float v_start = read_vcap();
+        kalman_predict(probe_ms / 1000.0f);
+        kalman_update(v_start);
+        vTaskDelay((int)probe_ms / portTICK_PERIOD_MS);
+        float v_end = read_vcap();
+        kalman_update(v_end);
+        slopes[i] = kalman_x[1];
+    }
+    int best_idx = slopes[0] > slopes[1] ? (slopes[0] > slopes[2] ? 0 : 2) : (slopes[1] > slopes[2] ? 1 : 2);
+    best_mppt_ratio = ratios[best_idx];
+    set_mppt_ratio(best_mppt_ratio);
+    return slopes[best_idx];
+}
+
+// Update main loop Vcap/slope measurement:
+vcap = read_vcap();
+kalman_predict(ULP_SAMPLE_MS / 1000.0f);
+kalman_update(vcap);
+vcap = kalman_x[0];
+slope_mVs = kalman_x[1];
