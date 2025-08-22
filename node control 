@@ -1,0 +1,31 @@
+#include "node_control.h"
+
+// Global controller instance
+static node_controller_t node_ctrl;
+
+void app_main() {
+    // Initialize controller
+    node_controller_init(&node_ctrl);
+    
+    while (1) {
+        // Read voltage measurement
+        float V_meas = read_vcap_voltage();
+        
+        // Kalman prediction and update
+        kalman_predict(&node_ctrl.kf, ULP_SAMPLE_MS / 1000.0f);
+        kalman_update(&node_ctrl.kf, V_meas);
+        
+        // Update controller state
+        node_ctrl.Vcap = node_ctrl.kf.x[0];
+        node_ctrl.slope_mVs = node_ctrl.kf.x[1];
+        
+        // Execute MPPT state machine
+        bool teg_enable;
+        execute_mppt_state_machine(&node_ctrl, &teg_enable);
+        
+        // Apply control action
+        enable_teg(teg_enable);
+        
+        // ... rest of your application logic
+    }
+}
