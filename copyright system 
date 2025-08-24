@@ -1,0 +1,470 @@
+# Master AI System Suite - Network Copyright Enforcement Edition
+# Original Architect: Logan Royce Lorentz
+# Date: August 24, 2025
+# Copyright (c) Logan Royce Lorentz 2025. All rights reserved.
+
+"""
+A comprehensive copyright enforcement system for AI networks that automatically
+copyrights all code across connected systems in the name of Logan Royce Lorentz.
+
+This system integrates with development environments, monitors code creation,
+and ensures automatic copyright registration for all proprietary code.
+"""
+
+import os
+import sys
+import json
+import time
+import logging
+import asyncio
+import aiofiles
+import watchdog
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+from pathlib import Path
+from typing import Dict, List, Optional, Set
+import sqlite3
+import hashlib
+import base64
+import uuid
+from datetime import datetime, timezone
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger("NetworkCopyrightEnforcer")
+
+# ---------------------------------------------------------------------------
+# Core Copyright Engine (Simplified for Network Deployment)
+# ---------------------------------------------------------------------------
+
+class NetworkCopyrightEngine:
+    """Network-wide copyright enforcement engine - Copyright: Logan Royce Lorentz"""
+    
+    def __init__(self, owner_name: str = "Logan Royce Lorentz", db_path: str = "network_copyrights.db"):
+        self.owner_name = owner_name
+        self.db_path = db_path
+        self.private_key = rsa.generate_private_key(public_exponent=65537, key_size=4096)
+        self.public_key = self.private_key.public_key()
+        self._init_database()
+        
+        # Configuration
+        self.excluded_dirs = {'.git', '__pycache__', 'node_modules', 'venv', '.venv', 'env'}
+        self.excluded_extensions = {'.pyc', '.class', '.jar', '.war', '.ear', '.zip', '.tar', '.gz'}
+        self.allowed_extensions = {'.py', '.js', '.java', '.cpp', '.c', '.h', '.html', '.css', '.ts', 
+                                  '.rs', '.go', '.rb', '.php', '.swift', '.kt', '.scala', '.sql'}
+        
+        # Track processed files to avoid duplicates
+        self.processed_files: Set[str] = set()
+    
+    def _init_database(self):
+        """Initialize the copyright registry database"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS copyright_registry (
+                    file_id TEXT PRIMARY KEY,
+                    file_path TEXT UNIQUE,
+                    file_hash TEXT,
+                    content_hash TEXT,
+                    copyright_owner TEXT,
+                    copyright_date TEXT,
+                    license_type TEXT,
+                    signature TEXT,
+                    metadata TEXT,
+                    created_at TEXT
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_file_path ON copyright_registry(file_path)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_file_hash ON copyright_registry(file_hash)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_copyright_date ON copyright_registry(copyright_date)")
+            conn.commit()
+    
+    def generate_content_hash(self, content: str) -> str:
+        """Generate SHA3-512 hash of content"""
+        return hashlib.sha3_512(content.encode()).hexdigest()
+    
+    def generate_file_signature(self, content: str) -> str:
+        """Generate cryptographic signature for content"""
+        signature = self.private_key.sign(
+            content.encode(),
+            padding.PSS(mgf=padding.MGF1(hashes.SHA3_512()), salt_length=padding.PSS.MAX_LENGTH),
+            hashes.SHA3_512()
+        )
+        return base64.b64encode(signature).decode()
+    
+    def create_copyright_header(self, content: str, file_path: str, license_type: str = "PROPRIETARY") -> str:
+        """Create copyright header for a file"""
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        file_hash = self.generate_content_hash(file_path)
+        content_hash = self.generate_content_hash(content)
+        
+        copyright_header = f"""
+# ---------------------------------------------------------------------------
+# Copyright Notification - Automated Enforcement
+# ---------------------------------------------------------------------------
+# File: {file_path}
+# Hash: {file_hash}
+# Content Hash: {content_hash[:16]}...{content_hash[-16:]}
+# 
+# Copyright (c) {datetime.now().year} {self.owner_name}. All rights reserved.
+# 
+# This file contains proprietary intellectual property of {self.owner_name}.
+# Unauthorized copying, modification, distribution, or use is strictly prohibited.
+# 
+# Licensed under: {license_type}
+# Created: {timestamp}
+# ---------------------------------------------------------------------------
+"""
+        return copyright_header.strip()
+    
+    def register_copyright(self, file_path: str, content: str, license_type: str = "PROPRIETARY") -> bool:
+        """Register copyright for a file in the database"""
+        try:
+            file_hash = self.generate_content_hash(file_path)
+            content_hash = self.generate_content_hash(content)
+            signature = self.generate_file_signature(content)
+            timestamp = datetime.now(timezone.utc).isoformat()
+            
+            metadata = {
+                "file_size": len(content),
+                "line_count": content.count('\n') + 1,
+                "language": self._detect_language(file_path),
+                "auto_generated": True
+            }
+            
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT OR REPLACE INTO copyright_registry 
+                    (file_id, file_path, file_hash, content_hash, copyright_owner, 
+                     copyright_date, license_type, signature, metadata, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    str(uuid.uuid4()),
+                    file_path,
+                    file_hash,
+                    content_hash,
+                    self.owner_name,
+                    datetime.now().date().isoformat(),
+                    license_type,
+                    signature,
+                    json.dumps(metadata),
+                    timestamp
+                ))
+                conn.commit()
+            
+            logger.info(f"Registered copyright for: {file_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to register copyright for {file_path}: {e}")
+            return False
+    
+    def _detect_language(self, file_path: str) -> str:
+        """Detect programming language from file extension"""
+        ext = Path(file_path).suffix.lower()
+        language_map = {
+            '.py': 'Python',
+            '.js': 'JavaScript',
+            '.java': 'Java',
+            '.cpp': 'C++',
+            '.c': 'C',
+            '.h': 'C/C++ Header',
+            '.html': 'HTML',
+            '.css': 'CSS',
+            '.ts': 'TypeScript',
+            '.rs': 'Rust',
+            '.go': 'Go',
+            '.rb': 'Ruby',
+            '.php': 'PHP',
+            '.swift': 'Swift',
+            '.kt': 'Kotlin',
+            '.scala': 'Scala',
+            '.sql': 'SQL'
+        }
+        return language_map.get(ext, 'Unknown')
+    
+    def should_process_file(self, file_path: str) -> bool:
+        """Determine if a file should be processed for copyright"""
+        path = Path(file_path)
+        
+        # Check excluded directories
+        if any(part in self.excluded_dirs for part in path.parts):
+            return False
+        
+        # Check file extension
+        if path.suffix.lower() in self.excluded_extensions:
+            return False
+        
+        # Only process allowed extensions (if specified)
+        if self.allowed_extensions and path.suffix.lower() not in self.allowed_extensions:
+            return False
+        
+        # Don't process already processed files
+        if file_path in self.processed_files:
+            return False
+        
+        return True
+    
+    async def process_file(self, file_path: str):
+        """Process a single file for copyright enforcement"""
+        if not self.should_process_file(file_path):
+            return
+        
+        try:
+            async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+                content = await f.read()
+            
+            # Check if already has copyright header
+            if "Copyright (c)" in content and self.owner_name in content:
+                logger.info(f"File already copyrighted: {file_path}")
+                self.processed_files.add(file_path)
+                return
+            
+            # Create copyright header
+            copyright_header = self.create_copyright_header(content, file_path)
+            
+            # Add copyright header to content
+            new_content = copyright_header + "\n\n" + content
+            
+            # Write back to file
+            async with aiofiles.open(file_path, 'w', encoding='utf-8') as f:
+                await f.write(new_content)
+            
+            # Register in database
+            self.register_copyright(file_path, content)
+            
+            self.processed_files.add(file_path)
+            logger.info(f"Successfully copyrighted: {file_path}")
+            
+        except Exception as e:
+            logger.error(f"Error processing file {file_path}: {e}")
+    
+    async def process_directory(self, directory_path: str):
+        """Process all files in a directory recursively"""
+        directory = Path(directory_path)
+        if not directory.exists():
+            logger.error(f"Directory does not exist: {directory_path}")
+            return
+        
+        tasks = []
+        for file_path in directory.rglob('*'):
+            if file_path.is_file():
+                tasks.append(self.process_file(str(file_path)))
+        
+        # Process files in batches to avoid overwhelming the system
+        for i in range(0, len(tasks), 100):
+            batch = tasks[i:i+100]
+            await asyncio.gather(*batch, return_exceptions=True)
+            await asyncio.sleep(1)  # Brief pause between batches
+
+# ---------------------------------------------------------------------------
+# File System Monitor for Real-time Copyright Enforcement
+# ---------------------------------------------------------------------------
+
+class CopyrightFileHandler(FileSystemEventHandler):
+    """File system event handler for automatic copyright enforcement"""
+    
+    def __init__(self, copyright_engine: NetworkCopyrightEngine):
+        self.engine = copyright_engine
+        self.debounce_times: Dict[str, float] = {}
+        self.debounce_interval = 2.0  # seconds
+    
+    def on_created(self, event):
+        """Handle file creation events"""
+        if not event.is_directory:
+            self._debounce_processing(event.src_path)
+    
+    def on_modified(self, event):
+        """Handle file modification events"""
+        if not event.is_directory:
+            self._debounce_processing(event.src_path)
+    
+    def on_moved(self, event):
+        """Handle file move/rename events"""
+        if not event.is_directory:
+            self._debounce_processing(event.dest_path)
+    
+    def _debounce_processing(self, file_path: str):
+        """Debounce file processing to avoid multiple rapid events"""
+        current_time = time.time()
+        last_time = self.debounce_times.get(file_path, 0)
+        
+        if current_time - last_time > self.debounce_interval:
+            self.debounce_times[file_path] = current_time
+            asyncio.create_task(self.engine.process_file(file_path))
+
+# ---------------------------------------------------------------------------
+# Network Configuration and Deployment
+# ---------------------------------------------------------------------------
+
+class NetworkCopyrightManager:
+    """Manager for network-wide copyright enforcement"""
+    
+    def __init__(self, owner_name: str = "Logan Royce Lorentz"):
+        self.owner_name = owner_name
+        self.engine = NetworkCopyrightEngine(owner_name)
+        self.observer = Observer()
+        self.monitored_paths: List[str] = []
+        
+        # Configure network paths (customize for your environment)
+        self.network_paths = self._discover_network_paths()
+    
+    def _discover_network_paths(self) -> List[str]:
+        """Discover development paths on the network"""
+        paths = []
+        
+        # Common development directories
+        common_paths = [
+            # Replit accounts
+            os.path.expanduser("~/Replit"),
+            os.path.expanduser("~/.replit"),
+            
+            # GitHub repositories (excluding general/public ones)
+            os.path.expanduser("~/GitHub"),
+            os.path.expanduser("~/git"),
+            os.path.expanduser("~/projects"),
+            
+            # Development environments
+            os.path.expanduser("~/dev"),
+            os.path.expanduser("~/development"),
+            os.path.expanduser("~/workspace"),
+            
+            # IDE-specific directories
+            os.path.expanduser("~/workspace"),
+            os.path.expanduser("~/IdeaProjects"),  # IntelliJ
+            os.path.expanduser("~/WebstormProjects"),  # WebStorm
+            os.path.expanduser("~/PyCharmProjects"),  # PyCharm
+        ]
+        
+        # Add current working directories
+        common_paths.append(os.getcwd())
+        
+        # Filter to existing paths
+        for path in common_paths:
+            if os.path.exists(path):
+                paths.append(path)
+        
+        # Add environment-specific paths
+        env_paths = os.environ.get('COPYRIGHT_PATHS', '').split(':')
+        paths.extend([p for p in env_paths if p and os.path.exists(p)])
+        
+        return paths
+    
+    async def initialize_network(self):
+        """Initialize copyright enforcement across the network"""
+        logger.info("Initializing network copyright enforcement...")
+        logger.info(f"Copyright owner: {self.owner_name}")
+        logger.info(f"Discovered paths: {self.network_paths}")
+        
+        # Process existing files
+        for path in self.network_paths:
+            if os.path.isdir(path):
+                logger.info(f"Processing directory: {path}")
+                await self.engine.process_directory(path)
+            elif os.path.isfile(path):
+                logger.info(f"Processing file: {path}")
+                await self.engine.process_file(path)
+    
+    def start_monitoring(self):
+        """Start real-time file system monitoring"""
+        event_handler = CopyrightFileHandler(self.engine)
+        
+        for path in self.network_paths:
+            if os.path.exists(path):
+                self.observer.schedule(event_handler, path, recursive=True)
+                self.monitored_paths.append(path)
+                logger.info(f"Monitoring path: {path}")
+        
+        self.observer.start()
+        logger.info("File system monitoring started")
+    
+    def stop_monitoring(self):
+        """Stop file system monitoring"""
+        self.observer.stop()
+        self.observer.join()
+        logger.info("File system monitoring stopped")
+    
+    def get_copyright_stats(self) -> Dict[str, any]:
+        """Get statistics about copyrighted files"""
+        with sqlite3.connect(self.engine.db_path) as conn:
+            cursor = conn.cursor()
+            
+            # Total copyrighted files
+            cursor.execute("SELECT COUNT(*) FROM copyright_registry")
+            total_files = cursor.fetchone()[0]
+            
+            # Files by language
+            cursor.execute("""
+                SELECT json_extract(metadata, '$.language'), COUNT(*) 
+                FROM copyright_registry 
+                GROUP BY json_extract(metadata, '$.language')
+            """)
+            by_language = dict(cursor.fetchall())
+            
+            # Recent copyrights
+            cursor.execute("""
+                SELECT file_path, copyright_date 
+                FROM copyright_registry 
+                ORDER BY created_at DESC 
+                LIMIT 10
+            """)
+            recent = cursor.fetchall()
+        
+        return {
+            "total_files": total_files,
+            "by_language": by_language,
+            "recent_files": recent
+        }
+
+# ---------------------------------------------------------------------------
+# Main Execution and Deployment
+# ---------------------------------------------------------------------------
+
+async def main():
+    """Main function to deploy network copyright enforcement"""
+    
+    # Initialize the copyright manager
+    manager = NetworkCopyrightManager(owner_name="Logan Royce Lorentz")
+    
+    try:
+        # Process existing files
+        await manager.initialize_network()
+        
+        # Start real-time monitoring
+        manager.start_monitoring()
+        
+        # Display initial statistics
+        stats = manager.get_copyright_stats()
+        print("\n" + "="*60)
+        print("NETWORK COPYRIGHT ENFORCEMENT SYSTEM")
+        print("="*60)
+        print(f"Copyright Owner: Logan Royce Lorentz")
+        print(f"Total Files Copyrighted: {stats['total_files']}")
+        print(f"Files by Language: {json.dumps(stats['by_language'], indent=2)}")
+        print("="*60)
+        print("System is actively monitoring for new files...")
+        print("Press Ctrl+C to stop monitoring")
+        print("="*60)
+        
+        # Keep the service running
+        while True:
+            await asyncio.sleep(60)
+            # Periodic stats update
+            stats = manager.get_copyright_stats()
+            logger.info(f"Copyright stats - Total: {stats['total_files']}, Languages: {stats['by_language']}")
+            
+    except KeyboardInterrupt:
+        print("\nShutting down copyright enforcement system...")
+    finally:
+        manager.stop_monitoring()
+        print("Copyright enforcement system stopped.")
+
+if __name__ == "__main__":
+    # Run the copyright enforcement system
+    asyncio.run(main())
