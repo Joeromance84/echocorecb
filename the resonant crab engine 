@@ -474,4 +474,263 @@ class CarcinizedOmniOrganizingEngine:
                             other_id = batch[idx]
                             if other_id in self.nodes:
                                 self.graph.add_edge(
+  node_id, other_id,
+  weight=0.9,  # High weight for compost-discovered links
+                                    compost_derived=True,
+                                    created=time.time()
+            )
+            
+            logging.info(f"Processed compost batch of {len(batch)} items")
+            
+        except Exception as e:
+            logging.error(f"Compost processing failed: {e}")
+            # Return failed items to compost heap
+            with self._compost_lock:
+                self.compost_heap.extend(batch)
+
+    # ==================== BACKGROUND TASKS ====================
+    async def _periodic_resource_reallocation(self):
+        """Periodically reallocate resources based on priority"""
+        while self._running:
+            try:
+                with self._resource_lock:
+                    # Reallocate based on priority queues
+                    for priority in sorted(self.priority_queues.keys(), reverse=True):
+                        for process_id in self.priority_queues[priority]:
+                            if process_id in self.nodes:
+                                node = self.nodes[process_id]
+                                if node.resource_requirements:
+                                    self._allocate_resources(node.resource_requirements)
+                
+                await asyncio.sleep(EngineConfig.RESOURCE_REALLOCATION_INTERVAL)
+            except Exception as e:
+                logging.error(f"Resource reallocation task failed: {e}")
+                await asyncio.sleep(5)
+
+    async def _periodic_compost_processing(self):
+        """Periodically process compost heap"""
+        while self._running:
+            try:
+                await self._process_compost()
+                await asyncio.sleep(10)  # Process every 10 seconds
+            except Exception as e:
+                logging.error(f"Compost processing task failed: {e}")
+                await asyncio.sleep(5)
+
+    async def _periodic_persistence(self):
+        """Periodically persist engine state"""
+        while self._running:
+            try:
+                await self._persist_state()
+                await asyncio.sleep(EngineConfig.PERSISTENCE_INTERVAL)
+            except Exception as e:
+                logging.error(f"Persistence task failed: {e}")
+                await asyncio.sleep(30)
+
+    async def _periodic_reputation_adjustment(self):
+        """Periodically adjust node reputations based on usage"""
+        while self._running:
+            try:
+                current_time = time.time()
+                for node_id, node in self.nodes.items():
+                    # Decay reputation for unused nodes
+                    time_since_access = current_time - node.last_accessed
+                    if time_since_access > 3600:  # 1 hour
+                        decay_factor = min(0.95, time_since_access / 86400)  # Max 5% decay per day
+                        node.reputation *= (1 - decay_factor)
+                
+                await asyncio.sleep(3600)  # Run hourly
+            except Exception as e:
+                logging.error(f"Reputation adjustment failed: {e}")
+                await asyncio.sleep(300)
+
+    # ==================== PERSISTENCE ====================
+    async def _persist_state(self):
+        """Persist engine state to disk"""
+        try:
+            # Prepare data for serialization
+            state = {
+                'nodes': {nid: {
+                    'id': node.id,
+                    'content': node.content,
+                    'node_type': node.node_type.name,
+                    'hyperspatial_coords': {
+                        'dimensions': node.hyperspatial_coords.dimensions.tolist(),
+                        'fluctuation_rate': node.hyperspatial_coords.fluctuation_rate,
+                        'last_fluctuation': node.hyperspatial_coords.last_fluctuation
+                    },
+                    'quantum_signature': node.quantum_signature,
+                    'reputation': node.reputation,
+                    'celestial_alignment': node.celestial_alignment,
+                    'created_at': node.created_at,
+                    'last_accessed': node.last_accessed,
+                    'dependencies': list(node.dependencies)
+                } for nid, node in self.nodes.items()},
+                'graph': nx.node_link_data(self.graph),
+                'compost_heap': self.compost_heap
+            }
+            
+            # Serialize and write
+            timestamp = int(time.time())
+            state_file = self.persistence_path / f"state_{timestamp}.msgpack"
+            
+            with open(state_file, 'wb') as f:
+                packed = msgpack.packb(state)
+                f.write(packed)
+            
+            # Keep only latest 5 state files
+            state_files = sorted(self.persistence_path.glob("state_*.msgpack"))
+            for old_file in state_files[:-5]:
+                old_file.unlink()
+                
+            logging.info(f"Persisted state to {state_file}")
+            
+        except Exception as e:
+            logging.error(f"State persistence failed: {e}")
+
+    async def load_state(self, state_file: Path) -> bool:
+        """Load engine state from disk"""
+        try:
+            with open(state_file, 'rb') as f:
+                data = msgpack.unpackb(f.read())
+            
+            # Reconstruct nodes
+            self.nodes.clear()
+            for nid, node_data in data['nodes'].items():
+                coords_data = node_data['hyperspatial_coords']
+                hyperspatial_coords = HyperspatialCoords(
+                    dimensions=np.array(coords_data['dimensions']),
+                    fluctuation_rate=coords_data['fluctuation_rate'],
+                    last_fluctuation=coords_data['last_fluctuation']
+                )
+                
+                node = EliteNode(
+                    id=node_data['id'],
+                    content=node_data['content'],
+                    node_type=NodeType[node_data['node_type']],
+                    hyperspatial_coords=hyperspatial_coords,
+                    quantum_signature=node_data['quantum_signature'],
+                    reputation=node_data['reputation'],
+                    celestial_alignment=node_data['celestial_alignment'],
+                    created_at=node_data['created_at'],
+                    last_accessed=node_data['last_accessed'],
+                    dependencies=set(node_data['dependencies'])
+                )
+                
+                self.nodes[nid] = node
+            
+            # Reconstruct graph
+            self.graph = nx.node_link_graph(data['graph'])
+            
+            # Restore compost heap
+            self.compost_heap = data['compost_heap']
+            
+            logging.info(f"Loaded state from {state_file}")
+            return True
+            
+        except Exception as e:
+            logging.error(f"State loading failed: {e}")
+            return False
+
+    # ==================== UTILITY METHODS ====================
+    def _get_celestial_alignment(self) -> float:
+        """Calculate current celestial alignment (simplified)"""
+        now = time.localtime()
+        # More sophisticated calculation would consider actual astronomical data
+        hour_factor = (now.tm_hour % 12) / 11.0
+        minute_factor = now.tm_min / 59.0
+        return (hour_factor * 0.7 + minute_factor * 0.3) * 0.99  # Scale to 0-0.99
+
+    def _find_nodes_for_task(self, task: Dict) -> List[str]:
+        """Find suitable nodes for a given task"""
+        # This would use more sophisticated matching in production
+        suitable_nodes = []
+        for node_id, node in self.nodes.items():
+            if (node.node_type in [NodeType.PROCESS, NodeType.SERVICE] and 
+                node.reputation > 0.5):
+                suitable_nodes.append(node_id)
+        
+        return suitable_nodes
+
+    def _execute_on_node(self, node_id: str, task: Dict, data: Any) -> Any:
+        """Execute task on a specific node"""
+        # Placeholder for actual execution logic
+        node = self.nodes[node_id]
+        node.last_accessed = time.time()
+        node.reputation += 0.01  # Small reputation boost for being used
+        
+        logging.info(f"Executing task on node {node_id}")
+        return f"result_from_{node_id}"
+
+    # ==================== SHUTDOWN ====================
+    async def shutdown(self):
+        """Graceful shutdown of the engine"""
+        self._running = False
+        self._scheduler.shutdown(wait=False)
+        
+        # Persist final state
+        await self._persist_state()
+        
+        logging.info("Carcinized Omni-Organizing Engine shutdown complete")
+
+# ==================== AUXILIARY CLASSES ====================
+class ResourceMonitor:
+    """Monitors system resources and adjusts pool accordingly"""
+    
+    def __init__(self, engine: CarcinizedOmniOrganizingEngine):
+        self.engine = engine
+        self._running = True
+        asyncio.create_task(self._monitor_resources())
+    
+    async def _monitor_resources(self):
+        """Continuously monitor and update resource availability"""
+        while self._running:
+            try:
+                # Update available resources based on system state
+                cpu_available = psutil.cpu_count()
+                memory_available = psutil.virtual_memory().total // (1024 * 1024)
+                
+                with self.engine._resource_lock:
+                    self.engine.resource_pool['cpu_cores'] = cpu_available
+                    self.engine.resource_pool['memory_mb'] = memory_available
+                
+                await asyncio.sleep(5)
+            except Exception as e:
+                logging.error(f"Resource monitoring failed: {e}")
+                await asyncio.sleep(10)
+    
+    def stop(self):
+        """Stop resource monitoring"""
+        self._running = False
+
+# ==================== PRODUCTION USAGE ====================
+async def production_main():
+    """Main production entry point for the C-O²E engine"""
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler('/var/log/resonant_os/c_o2e.log'),
+            logging.StreamHandler()
+        ]
+    )
+    
+    # Initialize engine
+    engine = CarcinizedOmniOrganizingEngine(
+        persistence_path=Path('/var/lib/resonant_os/engine_state')
+    )
+    
+    try:
+        # Main production loop
+        while True:
+            await asyncio.sleep(1)
+            
+    except KeyboardInterrupt:
+        logging.info("Shutdown signal received")
+    finally:
+        await engine.shutdown()
+
+if __name__ == "__main__":
+    asyncio.run(production_main())
                               
