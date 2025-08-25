@@ -1,0 +1,707 @@
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.fft
+from scipy import signal
+from enum import Enum
+import threading
+import queue
+import time
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Optional, Callable
+import json
+import logging
+from logging.handlers import RotatingFileHandler
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        RotatingFileHandler('resonance_sensor.log', maxBytes=10*1024*1024, backupCount=5),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger("ResonanceSensor")
+
+class SensorType(Enum):
+    SONAR = "sonar"
+    RADAR = "radar"
+    THERMAL = "thermal"
+    OPTICAL = "optical"
+    RESONANCE = "resonance"
+
+@dataclass
+class SensorConfig:
+    frequency_range: Tuple[float, float]
+    resolution: Tuple[int, int]
+    sample_rate: float
+    resonance_modes: List[str]
+    calibration_params: Dict
+
+class ResonanceProcessor:
+    """Core resonance processing engine"""
+    
+    def __init__(self, config: SensorConfig):
+        self.config = config
+        self.resonance_modes = config.resonance_modes
+        self.setup_resonance_filters()
+        
+    def setup_resonance_filters(self):
+        """Initialize resonance filters based on configuration"""
+        self.filters = {}
+        
+        for mode in self.resonance_modes:
+            if mode == "harmonic":
+                # Harmonic resonance filter
+                self.filters[mode] = self.create_harmonic_filter()
+            elif mode == "stochastic":
+                # Stochastic resonance filter
+                self.filters[mode] = self.create_stochastic_filter()
+            elif mode == "quantum":
+                # Quantum-inspired resonance filter
+                self.filters[mode] = self.create_quantum_filter()
+                
+    def create_harmonic_filter(self):
+        """Create harmonic resonance filter"""
+        # Implement harmonic resonance detection
+        return lambda x: self.harmonic_resonance(x)
+    
+    def create_stochastic_filter(self):
+        """Create stochastic resonance filter"""
+        # Implement stochastic resonance enhancement
+        return lambda x: self.stochastic_resonance(x)
+    
+    def create_quantum_filter(self):
+        """Create quantum-inspired resonance filter"""
+        # Implement quantum-inspired resonance processing
+        return lambda x: self.quantum_resonance(x)
+    
+    def harmonic_resonance(self, data: np.ndarray) -> np.ndarray:
+        """Apply harmonic resonance analysis"""
+        # FFT-based resonance detection
+        fft_data = np.fft.fft2(data)
+        frequencies = np.fft.fftfreq(data.shape[0])
+        
+        # Find resonant frequencies
+        resonance_peaks = self.find_resonance_peaks(fft_data, frequencies)
+        
+        # Enhance resonant frequencies
+        enhanced_fft = self.enhance_resonances(fft_data, resonance_peaks)
+        
+        # Inverse FFT
+        return np.fft.ifft2(enhanced_fft).real
+    
+    def stochastic_resonance(self, data: np.ndarray, noise_level: float = 0.1) -> np.ndarray:
+        """Apply stochastic resonance to enhance weak signals"""
+        # Add optimal noise to enhance weak signals through resonance
+        noise = np.random.normal(0, noise_level, data.shape)
+        return data + noise * self.calculate_resonance_factor(data)
+    
+    def quantum_resonance(self, data: np.ndarray) -> np.ndarray:
+        """Quantum-inspired resonance processing"""
+        # Implement quantum-inspired algorithms for resonance detection
+        # This could use quantum-inspired annealing or other methods
+        
+        # Placeholder for quantum resonance processing
+        entangled_data = self.quantum_entanglement_simulation(data)
+        return self.quantum_measurement(entangled_data)
+    
+    def find_resonance_peaks(self, fft_data: np.ndarray, frequencies: np.ndarray) -> List[float]:
+        """Identify resonance peaks in frequency domain"""
+        magnitude = np.abs(fft_data)
+        peaks, _ = signal.find_peaks(magnitude.flatten(), height=np.mean(magnitude)*2)
+        return frequencies[peaks]
+    
+    def enhance_resonances(self, fft_data: np.ndarray, resonance_peaks: List[float]) -> np.ndarray:
+        """Enhance resonant frequencies in the data"""
+        enhanced = fft_data.copy()
+        for peak in resonance_peaks:
+            # Apply resonance enhancement around peak frequencies
+            peak_idx = np.argmin(np.abs(np.fft.fftfreq(fft_data.shape[0]) - peak))
+            enhanced[peak_idx] *= 2  # Enhance resonance
+        return enhanced
+    
+    def process(self, data: np.ndarray, mode: str = "harmonic") -> np.ndarray:
+        """Process data using specified resonance mode"""
+        if mode not in self.filters:
+            raise ValueError(f"Unsupported resonance mode: {mode}")
+        
+        return self.filters[mode](data)
+    
+    def multi_mode_process(self, data: np.ndarray) -> Dict[str, np.ndarray]:
+        """Process data using all available resonance modes"""
+        results = {}
+        for mode in self.resonance_modes:
+            results[mode] = self.process(data, mode)
+        return results
+
+class SensorFusionEngine:
+    """Fusion engine for multiple sensor modalities"""
+    
+    def __init__(self):
+        self.sensors = {}
+        self.fusion_algorithms = {
+            "weighted_average": self.weighted_average_fusion,
+            "deep_fusion": self.deep_fusion,
+            "resonance_fusion": self.resonance_based_fusion
+        }
+        self.fusion_model = self.build_fusion_model()
+        
+    def register_sensor(self, sensor_type: SensorType, processor: ResonanceProcessor):
+        """Register a sensor with the fusion engine"""
+        self.sensors[sensor_type.value] = processor
+        
+    def build_fusion_model(self) -> nn.Module:
+        """Build neural network model for sensor fusion"""
+        class FusionNet(nn.Module):
+            def __init__(self, input_dims: Dict[str, int]):
+                super(FusionNet, self).__init__()
+                self.encoders = nn.ModuleDict()
+                self.decoder = nn.Sequential(
+                    nn.Linear(sum(input_dims.values()), 512),
+                    nn.ReLU(),
+                    nn.Linear(512, 256),
+                    nn.ReLU(),
+                    nn.Linear(256, 128),
+                    nn.ReLU(),
+                    nn.Linear(128, 64),
+                    nn.ReLU(),
+                )
+                
+                for sensor, dim in input_dims.items():
+                    self.encoders[sensor] = nn.Sequential(
+                        nn.Linear(dim, 128),
+                        nn.ReLU(),
+                        nn.Linear(128, 64),
+                        nn.ReLU()
+                    )
+            
+            def forward(self, x: Dict[str, torch.Tensor]) -> torch.Tensor:
+                encoded = []
+                for sensor, data in x.items():
+                    encoded.append(self.encoders[sensor](data))
+                concatenated = torch.cat(encoded, dim=1)
+                return self.decoder(concatenated)
+        
+        return FusionNet({"sonar": 100, "radar": 100, "thermal": 100, "optical": 100})
+    
+    def weighted_average_fusion(self, sensor_data: Dict[str, np.ndarray]) -> np.ndarray:
+        """Weighted average fusion of sensor data"""
+        weights = {
+            "sonar": 0.2,
+            "radar": 0.25,
+            "thermal": 0.25,
+            "optical": 0.3
+        }
+        
+        fused = np.zeros_like(next(iter(sensor_data.values())))
+        for sensor, data in sensor_data.items():
+            if sensor in weights:
+                fused += data * weights[sensor]
+        return fused
+    
+    def deep_fusion(self, sensor_data: Dict[str, np.ndarray]) -> np.ndarray:
+        """Deep learning-based fusion of sensor data"""
+        # Convert to tensors
+        tensor_data = {}
+        for sensor, data in sensor_data.items():
+            tensor_data[sensor] = torch.from_numpy(data.flatten()[:100]).float()
+        
+        # Run through fusion model
+        with torch.no_grad():
+            fused = self.fusion_model(tensor_data)
+        
+        return fused.numpy()
+    
+    def resonance_based_fusion(self, sensor_data: Dict[str, np.ndarray]) -> np.ndarray:
+        """Resonance-based fusion of sensor data"""
+        # Find common resonant frequencies across sensors
+        common_resonances = self.find_common_resonances(sensor_data)
+        
+        # Fuse data based on resonant frequencies
+        fused = np.zeros_like(next(iter(sensor_data.values())))
+        for sensor, data in sensor_data.items():
+            resonant_data = self.enhance_resonant_frequencies(data, common_resonances)
+            fused += resonant_data / len(sensor_data)
+        
+        return fused
+    
+    def find_common_resonances(self, sensor_data: Dict[str, np.ndarray]) -> List[float]:
+        """Find resonant frequencies common across multiple sensors"""
+        all_resonances = []
+        
+        for data in sensor_data.values():
+            fft_data = np.fft.fft2(data)
+            frequencies = np.fft.fftfreq(data.shape[0])
+            resonances = self.find_strong_resonances(fft_data, frequencies)
+            all_resonances.append(resonances)
+        
+        # Find common resonances across sensors
+        common_resonances = set(all_resonances[0])
+        for resonances in all_resonances[1:]:
+            common_resonances.intersection_update(resonances)
+        
+        return list(common_resonances)
+    
+    def find_strong_resonances(self, fft_data: np.ndarray, frequencies: np.ndarray, 
+                              threshold: float = 2.0) -> List[float]:
+        """Find strong resonant frequencies"""
+        magnitude = np.abs(fft_data)
+        mean_magnitude = np.mean(magnitude)
+        strong_indices = np.where(magnitude > mean_magnitude * threshold)
+        return frequencies[strong_indices].tolist()
+    
+    def enhance_resonant_frequencies(self, data: np.ndarray, resonances: List[float]) -> np.ndarray:
+        """Enhance specific resonant frequencies in data"""
+        fft_data = np.fft.fft2(data)
+        frequencies = np.fft.fftfreq(data.shape[0])
+        
+        for resonance in resonances:
+            idx = np.argmin(np.abs(frequencies - resonance))
+            fft_data[idx] *= 2  # Double the amplitude at resonant frequency
+        
+        return np.fft.ifft2(fft_data).real
+    
+    def fuse(self, sensor_data: Dict[str, np.ndarray], method: str = "resonance_fusion") -> np.ndarray:
+        """Fuse data from multiple sensors"""
+        if method not in self.fusion_algorithms:
+            raise ValueError(f"Unknown fusion method: {method}")
+        
+        return self.fusion_algorithms[method](sensor_data)
+
+class AnomalyDetector:
+    """Advanced anomaly detection using resonance patterns"""
+    
+    def __init__(self, sensitivity: float = 0.8):
+        self.sensitivity = sensitivity
+        self.reference_patterns = {}
+        self.anomaly_threshold = 0.7
+        self.setup_detection_algorithms()
+    
+    def setup_detection_algorithms(self):
+        """Setup various anomaly detection algorithms"""
+        self.detectors = {
+            "spectral_analysis": self.spectral_anomaly_detection,
+            "resonance_deviation": self.resonance_deviation_detection,
+            "pattern_recognition": self.pattern_based_detection,
+            "deep_anomaly": self.deep_anomaly_detection
+        }
+    
+    def spectral_anomaly_detection(self, data: np.ndarray, reference: np.ndarray) -> float:
+        """Detect anomalies using spectral analysis"""
+        data_fft = np.fft.fft2(data)
+        reference_fft = np.fft.fft2(reference)
+        
+        # Calculate spectral difference
+        spectral_diff = np.abs(data_fft - reference_fft)
+        anomaly_score = np.mean(spectral_diff) / np.mean(np.abs(reference_fft))
+        
+        return anomaly_score
+    
+    def resonance_deviation_detection(self, data: np.ndarray, reference: np.ndarray) -> float:
+        """Detect anomalies based on resonance pattern deviations"""
+        # Extract resonance patterns
+        data_resonances = self.extract_resonance_patterns(data)
+        reference_resonances = self.extract_resonance_patterns(reference)
+        
+        # Calculate pattern deviation
+        deviation = 0
+        for freq in reference_resonances:
+            if freq in data_resonances:
+                deviation += abs(data_resonances[freq] - reference_resonances[freq])
+            else:
+                deviation += reference_resonances[freq]  # Missing resonance is full deviation
+        
+        return deviation / sum(reference_resonances.values())
+    
+    def extract_resonance_patterns(self, data: np.ndarray) -> Dict[float, float]:
+        """Extract resonance patterns from data"""
+        fft_data = np.fft.fft2(data)
+        frequencies = np.fft.fftfreq(data.shape[0])
+        magnitude = np.abs(fft_data)
+        
+        # Find peaks and their magnitudes
+        peaks, properties = signal.find_peaks(magnitude.flatten(), 
+                                             height=np.mean(magnitude)*1.5)
+        
+        resonances = {}
+        for peak, height in zip(peaks, properties['peak_heights']):
+            resonances[frequencies[peak]] = height
+        
+        return resonances
+    
+    def pattern_based_detection(self, data: np.ndarray, reference: np.ndarray) -> float:
+        """Pattern-based anomaly detection"""
+        # Use cross-correlation to find pattern differences
+        correlation = signal.correlate2d(data, reference, mode='same')
+        max_correlation = np.max(correlation)
+        normalizer = np.sqrt(np.sum(data**2) * np.sum(reference**2))
+        
+        # Normalized correlation score (1 = perfect match, 0 = no correlation)
+        correlation_score = max_correlation / normalizer if normalizer > 0 else 0
+        
+        # Anomaly score is inverse of correlation
+        return 1 - correlation_score
+    
+    def deep_anomaly_detection(self, data: np.ndarray, reference: np.ndarray) -> float:
+        """Deep learning-based anomaly detection"""
+        # Convert to tensors
+        data_tensor = torch.from_numpy(data).float().unsqueeze(0).unsqueeze(0)
+        reference_tensor = torch.from_numpy(reference).float().unsqueeze(0).unsqueeze(0)
+        
+        # Use a simple autoencoder for anomaly detection
+        reconstructed = self.autoencoder(data_tensor)
+        loss = nn.functional.mse_loss(reconstructed, data_tensor)
+        
+        # Normalize loss to 0-1 range
+        return min(loss.item() * 10, 1.0)  # Scale factor might need adjustment
+    
+    def autoencoder(self, x: torch.Tensor) -> torch.Tensor:
+        """Simple autoencoder for anomaly detection"""
+        # Encoder
+        encoded = torch.relu(nn.Conv2d(1, 16, 3, padding=1)(x))
+        encoded = torch.relu(nn.Conv2d(16, 8, 3, padding=1)(encoded))
+        
+        # Decoder
+        decoded = torch.relu(nn.Conv2d(8, 16, 3, padding=1)(encoded))
+        decoded = nn.Conv2d(16, 1, 3, padding=1)(decoded)
+        
+        return decoded
+    
+    def detect(self, data: np.ndarray, reference: np.ndarray, 
+               method: str = "resonance_deviation") -> Tuple[bool, float]:
+        """Detect anomalies in data compared to reference"""
+        if method not in self.detectors:
+            raise ValueError(f"Unknown detection method: {method}")
+        
+        anomaly_score = self.detectors[method](data, reference)
+        is_anomaly = anomaly_score > self.anomaly_threshold * self.sensitivity
+        
+        return is_anomaly, anomaly_score
+    
+    def multi_method_detect(self, data: np.ndarray, reference: np.ndarray) -> Dict[str, Tuple[bool, float]]:
+        """Detect anomalies using all available methods"""
+        results = {}
+        for method, detector in self.detectors.items():
+            is_anomaly, score = detector(data, reference)
+            results[method] = (is_anomaly, score)
+        return results
+
+class ResonanceSensorEngine:
+    """Main engine for the advanced resonance-based sensor system"""
+    
+    def __init__(self, config_path: Optional[str] = None):
+        self.config = self.load_config(config_path)
+        self.sensor_processors = {}
+        self.fusion_engine = SensorFusionEngine()
+        self.anomaly_detector = AnomalyDetector()
+        self.data_queue = queue.Queue()
+        self.is_running = False
+        self.results = {}
+        
+        self.setup_sensors()
+        self.setup_visualization()
+    
+    def load_config(self, config_path: Optional[str]) -> Dict:
+        """Load configuration from file or use defaults"""
+        if config_path:
+            try:
+                with open(config_path, 'r') as f:
+                    return json.load(f)
+            except FileNotFoundError:
+                logger.warning(f"Config file {config_path} not found, using defaults")
+        
+        # Default configuration
+        return {
+            "sensors": {
+                "sonar": {
+                    "frequency_range": [20000, 100000],
+                    "resolution": [256, 256],
+                    "sample_rate": 44100,
+                    "resonance_modes": ["harmonic", "stochastic"],
+                    "calibration_params": {"gain": 1.0, "threshold": 0.1}
+                },
+                "radar": {
+                    "frequency_range": [1e9, 10e9],
+                    "resolution": [512, 512],
+                    "sample_rate": 1000000,
+                    "resonance_modes": ["harmonic", "quantum"],
+                    "calibration_params": {"power": 100, "pulse_width": 0.1}
+                },
+                "thermal": {
+                    "frequency_range": [3e11, 4e14],
+                    "resolution": [320, 240],
+                    "sample_rate": 30,
+                    "resonance_modes": ["harmonic"],
+                    "calibration_params": {"emissivity": 0.95, "reflection": 0.05}
+                },
+                "optical": {
+                    "frequency_range": [430e12, 750e12],
+                    "resolution": [1920, 1080],
+                    "sample_rate": 60,
+                    "resonance_modes": ["harmonic", "stochastic", "quantum"],
+                    "calibration_params": {"exposure": 0.1, "aperture": 2.8}
+                }
+            },
+            "fusion_method": "resonance_fusion",
+            "detection_method": "resonance_deviation",
+            "sensitivity": 0.8,
+            "visualization": {
+                "enabled": True,
+                "update_interval": 0.1
+            }
+        }
+    
+    def setup_sensors(self):
+        """Setup all sensors based on configuration"""
+        for sensor_type, sensor_config in self.config["sensors"].items():
+            config = SensorConfig(
+                frequency_range=tuple(sensor_config["frequency_range"]),
+                resolution=tuple(sensor_config["resolution"]),
+                sample_rate=sensor_config["sample_rate"],
+                resonance_modes=sensor_config["resonance_modes"],
+                calibration_params=sensor_config["calibration_params"]
+            )
+            
+            processor = ResonanceProcessor(config)
+            self.sensor_processors[sensor_type] = processor
+            self.fusion_engine.register_sensor(SensorType(sensor_type), processor)
+            
+            logger.info(f"Initialized {sensor_type} sensor processor")
+    
+    def setup_visualization(self):
+        """Setup visualization components"""
+        if self.config["visualization"]["enabled"]:
+            self.fig, self.axes = plt.subplots(2, 3, figsize=(15, 10))
+            self.images = {}
+            self.animation = None
+    
+    def simulate_sensor_data(self, sensor_type: str) -> np.ndarray:
+        """Simulate sensor data for testing (replace with actual sensor input)"""
+        resolution = self.config["sensors"][sensor_type]["resolution"]
+        
+        # Generate different patterns based on sensor type
+        if sensor_type == "sonar":
+            # Simulate sonar ping response
+            data = np.random.rand(*resolution) * 0.5
+            # Add some simulated objects
+            y, x = np.ogrid[:resolution[0], :resolution[1]]
+            center = resolution[0] // 2, resolution[1] // 2
+            mask = (x - center[1])**2 + (y - center[0])**2 < min(resolution)//4**2
+            data[mask] += 0.5
+            
+        elif sensor_type == "radar":
+            # Simulate radar response
+            data = np.random.rand(*resolution) * 0.3
+            # Add some simulated targets
+            for i in range(3):
+                center = (np.random.randint(0, resolution[0]), 
+                         np.random.randint(0, resolution[1]))
+                size = np.random.randint(10, min(resolution)//5)
+                y, x = np.ogrid[:resolution[0], :resolution[1]]
+                mask = (x - center[1])**2 + (y - center[0])**2 < size**2
+                data[mask] += 0.7
+            
+        elif sensor_type == "thermal":
+            # Simulate thermal image
+            data = np.random.rand(*resolution) * 0.4 + 0.3  # Base temperature
+            # Add heat sources
+            hotspots = np.random.rand(5, 2) * np.array(resolution)
+            for hotspot in hotspots:
+                y, x = np.ogrid[:resolution[0], :resolution[1]]
+                dist = np.sqrt((x - hotspot[1])**2 + (y - hotspot[0])**2)
+                data += np.exp(-dist / 20) * 0.4
+            
+        elif sensor_type == "optical":
+            # Simulate optical image
+            data = np.random.rand(*resolution) * 0.5
+            # Add some objects
+            for i in range(2):
+                center = (np.random.randint(0, resolution[0]), 
+                         np.random.randint(0, resolution[1]))
+                size = np.random.randint(20, min(resolution)//3)
+                y, x = np.ogrid[:resolution[0], :resolution[1]]
+                mask = (x - center[1])**2 + (y - center[0])**2 < size**2
+                data[mask] = np.random.rand() * 0.5 + 0.5
+            
+        return data
+    
+    def capture_data(self):
+        """Capture data from all sensors"""
+        sensor_data = {}
+        
+        for sensor_type in self.sensor_processors.keys():
+            # In a real implementation, this would read from actual sensors
+            raw_data = self.simulate_sensor_data(sensor_type)
+            
+            # Process with resonance engine
+            processed_data = self.sensor_processors[sensor_type].process(raw_data)
+            
+            sensor_data[sensor_type] = processed_data
+        
+        return sensor_data
+    
+    def process_cycle(self):
+        """Run a complete processing cycle"""
+        # Capture and process sensor data
+        sensor_data = self.capture_data()
+        
+        # Fuse data from all sensors
+        fused_data = self.fusion_engine.fuse(
+            sensor_data, 
+            self.config.get("fusion_method", "resonance_fusion")
+        )
+        
+        # Detect anomalies (compared to previous frame)
+        reference = self.results.get("fused_data", np.zeros_like(fused_data))
+        is_anomaly, anomaly_score = self.anomaly_detector.detect(
+            fused_data, 
+            reference,
+            self.config.get("detection_method", "resonance_deviation")
+        )
+        
+        # Store results
+        self.results = {
+            "sensor_data": sensor_data,
+            "fused_data": fused_data,
+            "anomaly_detected": is_anomaly,
+            "anomaly_score": anomaly_score,
+            "timestamp": time.time()
+        }
+        
+        # Log results
+        if is_anomaly:
+            logger.warning(f"Anomaly detected! Score: {anomaly_score:.3f}")
+        else:
+            logger.info(f"No anomaly detected. Score: {anomaly_score:.3f}")
+        
+        return self.results
+    
+    def start_continuous_operation(self):
+        """Start continuous operation in a separate thread"""
+        self.is_running = True
+        
+        def operation_loop():
+            while self.is_running:
+                try:
+                    self.process_cycle()
+                    time.sleep(0.1)  # Adjust based on your needs
+                except Exception as e:
+                    logger.error(f"Error in operation loop: {e}")
+        
+        self.operation_thread = threading.Thread(target=operation_loop)
+        self.operation_thread.daemon = True
+        self.operation_thread.start()
+        
+        logger.info("Started continuous operation")
+    
+    def stop_continuous_operation(self):
+        """Stop continuous operation"""
+        self.is_running = False
+        if hasattr(self, 'operation_thread'):
+            self.operation_thread.join(timeout=1.0)
+        
+        logger.info("Stopped continuous operation")
+    
+    def update_visualization(self, frame):
+        """Update visualization with latest data"""
+        if not self.results:
+            return
+        
+        sensor_data = self.results["sensor_data"]
+        fused_data = self.results["fused_data"]
+        
+        # Plot each sensor's data
+        sensors = list(sensor_data.keys())
+        for i, sensor in enumerate(sensors[:4]):
+            ax = self.axes[i // 2, i % 2]
+            if sensor not in self.images:
+                self.images[sensor] = ax.imshow(sensor_data[sensor], cmap='viridis')
+                ax.set_title(sensor.capitalize())
+            else:
+                self.images[sensor].set_data(sensor_data[sensor])
+        
+        # Plot fused data
+        ax = self.axes[0, 2]
+        if "fused" not in self.images:
+            self.images["fused"] = ax.imshow(fused_data, cmap='plasma')
+            ax.set_title("Fused Data")
+        else:
+            self.images["fused"].set_data(fused_data)
+        
+        # Plot anomaly detection result
+        ax = self.axes[1, 2]
+        anomaly_text = f"Anomaly: {'DETECTED' if self.results['anomaly_detected'] else 'None'}\nScore: {self.results['anomaly_score']:.3f}"
+        if "anomaly" not in self.images:
+            self.images["anomaly"] = ax.text(0.5, 0.5, anomaly_text, 
+                                           ha='center', va='center', transform=ax.transAxes,
+                                           fontsize=14, 
+                                           color='red' if self.results['anomaly_detected'] else 'green')
+            ax.set_title("Anomaly Detection")
+            ax.axis('off')
+        else:
+            self.images["anomaly"].set_text(anomaly_text)
+            self.images["anomaly"].set_color('red' if self.results['anomaly_detected'] else 'green')
+        
+        return list(self.images.values())
+    
+    def start_visualization(self):
+        """Start real-time visualization"""
+        if not self.config["visualization"]["enabled"]:
+            logger.warning("Visualization is disabled in configuration")
+            return
+        
+        self.animation = FuncAnimation(
+            self.fig, 
+            self.update_visualization, 
+            interval=self.config["visualization"]["update_interval"] * 1000,
+            blit=True
+        )
+        plt.show()
+    
+    def save_results(self, filepath: str):
+        """Save current results to file"""
+        if not self.results:
+            logger.warning("No results to save")
+            return
+        
+        # Convert numpy arrays to lists for JSON serialization
+        save_data = {
+            "timestamp": self.results["timestamp"],
+            "anomaly_detected": self.results["anomaly_detected"],
+            "anomaly_score": float(self.results["anomaly_score"]),
+            "sensor_data_shapes": {k: v.shape for k, v in self.results["sensor_data"].items()},
+            "fused_data_shape": self.results["fused_data"].shape
+        }
+        
+        with open(filepath, 'w') as f:
+            json.dump(save_data, f, indent=2)
+        
+        logger.info(f"Results saved to {filepath}")
+
+# Example usage
+if __name__ == "__main__":
+    # Create the resonance sensor engine
+    engine = ResonanceSensorEngine()
+    
+    try:
+        # Start continuous operation
+        engine.start_continuous_operation()
+        
+        # Start visualization (if enabled)
+        if engine.config["visualization"]["enabled"]:
+            engine.start_visualization()
+        else:
+            # If no visualization, run for a while then exit
+            time.sleep(10)
+            engine.stop_continuous_operation()
+            
+    except KeyboardInterrupt:
+        print("Shutting down...")
+    finally:
+        engine.stop_continuous_operation()
+        # Save final results
+        engine.save_results("final_results.json")        
