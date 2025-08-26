@@ -1,0 +1,64 @@
+// device-portal.ts - Extend portals to physical devices
+import { Bluetooth } from 'node-ble';
+import { SerialPort } from 'serialport';
+
+export class DevicePortalManager extends PortalManager {
+  private bluetooth: Bluetooth;
+  private serialPorts: Map<string, SerialPort> = new Map();
+  
+  constructor() {
+    super();
+    this.bluetooth = new Bluetooth();
+    this.setupDeviceRoutes();
+  }
+  
+  private setupDeviceRoutes() {
+    // Extend the base router with device-specific routes
+    this.app.post('/device/bluetooth/connect', async (req, res) => {
+      const { deviceId } = req.body;
+      try {
+        const connected = await this.connectBluetooth(deviceId);
+        res.json({ connected });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+    
+    this.app.post('/device/serial/connect', async (req, res) => {
+      const { path, baudRate } = req.body;
+      try {
+        const portId = await this.connectSerial(path, baudRate);
+        res.json({ portId });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+  }
+  
+  async connectBluetooth(deviceId: string): Promise<boolean> {
+    // Implementation for Bluetooth device connection
+    await this.bluetooth.connect(deviceId);
+    return true;
+  }
+  
+  async connectSerial(path: string, baudRate: number = 9600): Promise<string> {
+    const portId = uuidv4();
+    const port = new SerialPort({ path, baudRate });
+    
+    port.on('data', (data) => {
+      this.emit('serialData', { portId, data });
+    });
+    
+    this.serialPorts.set(portId, port);
+    return portId;
+  }
+  
+  async sendToDevice(portalId: string, deviceId: string, data: any): Promise<boolean> {
+    // Route data through portal to specific device
+    const portal = this.portals.get(portalId);
+    if (!portal) throw new Error('Portal not found');
+    
+    // Your implementation to send data to the device
+    return true;
+  }
+}
