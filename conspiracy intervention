@@ -1,0 +1,212 @@
+# Copyright 2025 Logan Royce Lorentz
+# conspiracy_intervention.py - Targeted Media_Exposé Shock on Loose_Change_9_11 Subsystem
+
+import networkx as nx
+import random
+import json
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Initialize directed graph for conspiracy subsystem
+G = nx.DiGraph()
+
+# Nodes (same as subsystem)
+nodes = {
+    "Entity": {"influence": 0.8, "trust": 0.5, "reach": 0.7},
+    "Mossad": {"influence": 0.6, "trust": 0.4, "reach": 0.5},
+    "Loose_Change_9_11": {"influence": 0.4, "trust": 0.3, "reach": 0.6},
+    "Media": {"influence": 0.5, "trust": 0.5, "reach": 0.8},
+    "Social_Media": {"influence": 0.4, "trust": 0.3, "reach": 0.9},
+    "Public_Perception": {"influence": 0.4, "trust": 0.5, "reach": 0.9},
+    "Academic_Critique": {"influence": 0.3, "trust": 0.8, "reach": 0.4},
+    "Independent_Investigators": {"influence": 0.3, "trust": 0.7, "reach": 0.5},
+    "Global_Critics": {"influence": 0.6, "trust": 0.8, "reach": 0.7},
+}
+
+for node, attrs in nodes.items():
+    G.add_node(node, **attrs)
+
+# Flows (same as subsystem)
+flows = [
+    ("Entity", "Mossad", {"weight": 0.5, "type": "Covert_Ops"}),
+    ("Mossad", "Loose_Change_9_11", {"weight": 0.6, "type": "Covert_Ops"}),
+    ("Loose_Change_9_11", "Media", {"weight": 0.6, "type": "Conspiracy_Propagation"}),
+    ("Loose_Change_9_11", "Social_Media", {"weight": 0.7, "type": "Conspiracy_Propagation"}),
+    ("Media", "Public_Perception", {"weight": 0.8, "type": "Conspiracy_Propagation"}),
+    ("Social_Media", "Public_Perception", {"weight": 0.9, "type": "Conspiracy_Propagation"}),
+    ("Public_Perception", "Academic_Critique", {"weight": 0.5, "type": "Conspiracy_Propagation"}),
+    ("Public_Perception", "Independent_Investigators", {"weight": 0.5, "type": "Conspiracy_Propagation"}),
+    ("Academic_Critique", "Loose_Change_9_11", {"weight": 0.6, "type": "Scrutiny"}),
+    ("Independent_Investigators", "Loose_Change_9_11", {"weight": 0.5, "type": "Scrutiny"}),
+    ("Global_Critics", "Loose_Change_9_11", {"weight": 0.7, "type": "Global_Backlash"}),
+]
+
+G.add_edges_from([(src, tgt, attrs) for src, tgt, attrs in flows])
+
+# Simulation parameters
+iterations = 100
+base_params = {
+    "r4_conspiracy": 0.1,  # Conspiracy propagation (α)
+    "b5_scrutiny": 0.05,   # Speculative collapse (γ)
+    "r3_narrative": 0.08,  # Narrative control
+}
+
+# Stochastic shocks with targeted Media_Exposé
+shock_triggers = {
+    "Conspiracy_Leak": {
+        "condition": lambda G: G.nodes["Loose_Change_9_11"]["reach"] < 0.7,
+        "prob": 0.1,
+        "effects": {"node": "Loose_Change_9_11", "influence_boost": 0.4, "trust_drop": 0.2, "target": "Social_Media", "target_reach_boost": 0.3}
+    },
+    "Media_Exposé": {
+        "condition": lambda G: True,  # Guaranteed at iteration 50
+        "prob": 1.0 if i == 50 else 0.0,
+        "effects": {"node": "Academic_Critique", "influence_boost": 0.4, "trust_drop": 0.1, "target": "Loose_Change_9_11", "target_trust_drop": 0.3}
+    },
+    "Investigator_Report": {
+        "condition": lambda G: G.nodes["Loose_Change_9_11"]["influence"] > 0.5,
+        "prob": 0.06,
+        "effects": {"node": "Independent_Investigators", "influence_boost": 0.3, "trust_drop": 0.1, "target": "Loose_Change_9_11", "target_trust_drop": 0.15}
+    },
+    "ICJ_Ruling": {
+        "condition": lambda G: G.nodes["Entity"]["influence"] > 0.7,
+        "prob": 0.05,
+        "effects": {"node": "Global_Critics", "influence_boost": 0.3, "trust_drop": 0.1, "target": "Entity", "target_trust_drop": 0.2}
+    }
+}
+
+# Simulate with targeted intervention
+def simulate_conspiracy_intervention(G, iterations, params, shock_triggers):
+    animation_data = []
+    animation_data.append({
+        "iteration": 0,
+        "nodes": {node: G.nodes[node].copy() for node in G.nodes},
+        "shocks": []
+    })
+    
+    for i in range(1, iterations + 1):
+        shocks_log = []
+        
+        # Apply shocks (force Media_Exposé at iteration 50)
+        for shock_type, shock in shock_triggers.items():
+            prob = shock["prob"](G) if callable(shock["prob"]) else shock["prob"]
+            if i == 50 and shock_type == "Media_Exposé":
+                prob = 1.0  # Force Media_Exposé
+            if shock["condition"](G) and random.random() < prob:
+                effects = shock["effects"]
+                G.nodes[effects["node"]]["influence"] = min(max(G.nodes[effects["node"]]["influence"] + effects.get("influence_boost", 0), 0), 1)
+                G.nodes[effects["node"]]["trust"] = min(max(G.nodes[effects["node"]]["trust"] - effects.get("trust_drop", 0), 0), 1)
+                if effects.get("target"):
+                    if "target_trust_drop" in effects:
+                        G.nodes[effects["target"]]["trust"] = min(max(G.nodes[effects["target"]]["trust"] - effects["target_trust_drop"], 0), 1)
+                    if "target_reach_boost" in effects:
+                        G.nodes[effects["target"]]["reach"] = min(max(G.nodes[effects["target"]]["reach"] + effects["target_reach_boost"], 0), 1)
+                shocks_log.append((i, shock_type, effects["node"]))
+        
+        # Apply loop dynamics
+        for node in G.nodes:
+            current_influence = G.nodes[node]["influence"]
+            current_trust = G.nodes[node]["trust"]
+            current_reach = G.nodes[node]["reach"]
+            
+            # R3: Narrative control
+            if node == "Entity":
+                for successor in G.successors(node):
+                    if G[node][successor]["type"] == "Covert_Ops":
+                        G.nodes[successor]["influence"] += params["r3_narrative"] * current_influence * G[node][successor]["weight"]
+                        G.nodes[successor]["trust"] -= params["b5_scrutiny"] * 0.5
+            
+            # R4: Conspiracy propagation
+            if node in ["Loose_Change_9_11", "Media", "Social_Media"]:
+                for successor in G.successors(node):
+                    if G[node][successor]["type"] == "Conspiracy_Propagation":
+                        G.nodes[successor]["reach"] += params["r4_conspiracy"] * current_reach * G[node][successor]["weight"]
+                        G.nodes[successor]["influence"] += params["r4_conspiracy"] * current_influence * G[node][successor]["weight"] * 0.5
+                        G.nodes[successor]["trust"] -= params["b5_scrutiny"] * G.nodes["Global_Critics"]["influence"] * 0.3
+            
+            # B5: Scrutiny collapse
+            if node in ["Academic_Critique", "Independent_Investigators"]:
+                for predecessor in G.predecessors(node):
+                    if G[predecessor][node]["type"] == "Conspiracy_Propagation":
+                        G.nodes[predecessor]["trust"] -= params["b5_scrutiny"] * current_influence * G[predecessor][node]["weight"]
+                        G.nodes[predecessor]["reach"] -= params["b5_scrutiny"] * current_reach * 0.5
+            
+            # Cap values
+            for attr in ["influence", "trust", "reach"]:
+                G.nodes[node][attr] = min(max(G.nodes[node][attr], 0), 1)
+        
+        # Record state
+        animation_data.append({
+            "iteration": i,
+            "nodes": {node: G.nodes[node].copy() for node in G.nodes},
+            "shocks": shocks_log
+        })
+    
+    # Save animation data
+    with open("conspiracy_intervention.json", "w") as f:
+        json.dump(animation_data, f, indent=2)
+    
+    # Save edge data
+    with open("conspiracy_edges.json", "w") as f:
+        json.dump({"edges": flows}, f, indent=2)
+    
+    return animation_data
+
+# Run simulation
+animation_data = simulate_conspiracy_intervention(G, iterations, base_params, shock_triggers)
+
+# FIDE Report Generation
+fide_nodes = {node: [] for node in nodes}
+for snapshot in animation_data:
+    for node_name, attrs in snapshot["nodes"].items():
+        fragility_index = attrs["influence"] - attrs["trust"]
+        fide_nodes[node_name].append({
+            "iteration": snapshot["iteration"],
+            "fragility": fragility_index,
+            "influence": attrs["influence"],
+            "trust": attrs["trust"],
+            "reach": attrs["reach"],
+            "active_shock": any(node_name in shock[2] for shock in snapshot["shocks"])
+        })
+
+# Analyze brittle nodes and loop activity
+brittle_nodes = {node: max(h["fragility"] for h in history) for node, history in fide_nodes.items() if max(h["fragility"] for h in history) > 0.5}
+loop_activity = {
+    "R3_Narrative": sum(1 for h in fide_nodes["Entity"] if h["fragility"] > 0.3),
+    "R4_Conspiracy": sum(1 for node in ["Loose_Change_9_11", "Media", "Social_Media"] for h in fide_nodes[node] if h["reach"] > 0.5),
+    "B5_Scrutiny": sum(1 for node in ["Academic_Critique", "Independent_Investigators"] for h in fide_nodes[node] if h["influence"] > 0.4)
+}
+loop_activity = {k: v / iterations for k, v in loop_activity.items()}
+
+# Generate FIDE report
+fide_report = {
+    "brittle_nodes": {node: f"Max Fragility: {value:.2f}" for node, value in brittle_nodes.items()},
+    "shock_impacts": {node: [h["iteration"] for h in history if h["active_shock"]] for node, history in fide_nodes.items() if any(h["active_shock"] for h in history)},
+    "loop_activity": {k: f"{v:.2f}" for k, v in loop_activity.items()}
+}
+
+# Save FIDE report
+with open("fide_intervention_report.json", "w") as f:
+    json.dump(fide_report, f, indent=2)
+
+# Plot Loose_Change_9_11 dynamics
+plt.figure(figsize=(10, 6))
+plt.plot([h["influence"] for h in fide_nodes["Loose_Change_9_11"]], label="Influence", linewidth=2)
+plt.plot([h["trust"] for h in fide_nodes["Loose_Change_9_11"]], label="Trust", linestyle="--")
+plt.plot([h["reach"] for h in fide_nodes["Loose_Change_9_11"]], label="Reach", linestyle=":")
+for h in fide_nodes["Loose_Change_9_11"]:
+    if h["active_shock"]:
+        plt.axvline(x=h["iteration"], color='red', linestyle='--', alpha=0.3, label="Shock" if h["iteration"] == 50 else "")
+plt.axvline(x=50, color='blue', linestyle='-', alpha=0.5, label="Media_Exposé")
+plt.title("Loose_Change_9_11 Dynamics with Targeted Media_Exposé (Iteration 50)")
+plt.xlabel("Iteration")
+plt.ylabel("Value (0-1)")
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+# Print FIDE report
+print("\nFIDE Intervention Report:")
+print("Brittle Nodes:", fide_report["brittle_nodes"])
+print("Shock Impacts (Sample):", {k: v[:2] for k, v in fide_report["shock_impacts"].items()})
+print("Loop Activity:", fide_report["loop_activity"])
