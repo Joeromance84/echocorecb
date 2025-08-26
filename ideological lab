@@ -1,0 +1,173 @@
+# Copyright 2025 Logan Royce Lorentz
+# ideological_lab_intervention.py - PyVis + FIDE Dashboard for Conspiracy Intervention
+
+from pyvis.network import Network
+import json
+import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
+import numpy as np
+
+# Load intervention data
+with open("conspiracy_intervention.json", "r") as f:
+    animation_data = json.load(f)
+with open("fide_intervention_report.json", "r") as f:
+    fide_report = json.load(f)
+with open("conspiracy_edges.json", "r") as f:
+    edge_data = json.load(f)
+
+# Initialize PyVis network
+net = Network(height="800px", width="100%", directed=True, notebook=False)
+
+# Normalize for visualization
+norm_influence = Normalize(vmin=0, vmax=1)
+norm_fragility = Normalize(vmin=0, vmax=1)
+norm_weight = Normalize(vmin=0, vmax=1)
+
+# Add nodes (using final iteration for static view)
+final_iteration = animation_data[-1]["nodes"]
+for node, attrs in final_iteration.items():
+    fragility = attrs["influence"] - attrs["trust"]
+    color = plt.cm.RdYlGn(1 - norm_fragility(fragility))  # Red=high fragility, green=low
+    color_hex = "#{:02x}{:02x}{:02x}".format(int(color[0]*255), int(color[1]*255), int(color[2]*255))
+    net.add_node(
+        node,
+        label=node,
+        size=10 + 40 * norm_influence(attrs["influence"]),
+        color=color_hex,
+        title=f"Influence: {attrs['influence']:.2f}, Trust: {attrs['trust']:.2f}, Reach: {attrs['reach']:.2f}, Fragility: {fragility:.2f}"
+    )
+
+# Add edges
+for edge in edge_data["edges"]:
+    net.add_edge(
+        edge["src"],
+        edge["tgt"],
+        value=1 + 4 * norm_weight(edge["weight"]),
+        title=f"{edge['type']} (Weight: {edge['weight']:.2f})"
+    )
+
+# Generate HTML dashboard
+html_template = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Ideological Lab: Media_Exposé Intervention</title>
+    <script type="text/javascript" src="https://unpkg.com/vis-network@9.1.2/dist/vis-network.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/vis-network@9.1.2/dist/dist/vis-network.min.css" />
+    <style>
+        body { font-family: Arial; }
+        #mynetwork { width: 70%; height: 800px; float: left; border: 1px solid black; }
+        #sidebar { width: 28%; float: right; padding: 10px; }
+        #slider { width: 100%; }
+        #fide-report { margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div id="mynetwork"></div>
+    <div id="sidebar">
+        <h3>Ideological Lab Controls</h3>
+        <label for="iteration">Iteration:</label>
+        <input type="range" id="slider" min="0" max="{max_iter}" value="0">
+        <div id="fide-report">
+            <h4>FIDE Report</h4>
+            <h5>Brittle Nodes</h5>
+            <pre>{brittle_nodes}</pre>
+            <h5>Shock Impacts</h5>
+            <pre>{shock_impacts}</pre>
+            <h5>Loop Activity</h5>
+            <pre>{loop_activity}</pre>
+        </div>
+    </div>
+    <script>
+        var nodes = {nodes};
+        var edges = {edges};
+        var animationData = {animation_data};
+        var container = document.getElementById('mynetwork');
+        var data = { nodes: new vis.DataSet([]), edges: new vis.DataSet(edges) };
+        var options = {options};
+        var network = new vis.Network(container, data, options);
+        
+        function updateNetwork(iteration) {{
+            var snapshot = animationData[iteration];
+            data.nodes.clear();
+            Object.keys(snapshot.nodes).forEach(function(node) {{
+                var attrs = snapshot.nodes[node];
+                var fragility = attrs.influence - attrs.trust;
+                var color = `hsl(${Math.min(120, 120 * (1 - fragility))}, 70%, 50%)`;
+                data.nodes.add({{
+                    id: node,
+                    label: node,
+                    size: 10 + 40 * attrs.influence,
+                    color: color,
+                    title: `Influence: ${attrs.influence.toFixed(2)}, Trust: ${attrs.trust.toFixed(2)}, Reach: ${attrs.reach.toFixed(2)}, Fragility: ${fragility.toFixed(2)}`
+                }});
+            }});
+            var shocks = snapshot.shocks.map(s => s[1] + ' (' + s[2] + ')').join(', ');
+            document.getElementById('fide-report').innerHTML = `
+                <h4>FIDE Report (Iteration ${iteration})</h4>
+                <h5>Brittle Nodes</h5><pre>{brittle_nodes}</pre>
+                <h5>Shock Impacts</h5><pre>${shocks || 'None'}</pre>
+                <h5>Loop Activity</h5><pre>{loop_activity}</pre>
+            `;
+        }}
+        
+        document.getElementById('slider').addEventListener('input', function(e) {{
+            updateNetwork(parseInt(e.target.value));
+        }});
+        
+        updateNetwork(0);
+    </script>
+</body>
+</html>
+"""
+
+# Format data for HTML
+nodes_json = {node: {"id": node, "label": node} for node in final_iteration}
+edges_json = [{"from": edge["src"], "to": edge["tgt"], "value": edge["weight"], "title": edge["type"]} for edge in edge_data["edges"]]
+options_json = {
+    "nodes": {"font": {"size": 12}},
+    "edges": {"arrows": {"to": {"enabled": True}}, "smooth": {"enabled": True, "type": "continuous"}},
+    "physics": {"enabled": True, "barnesHut": {"gravitationalConstant": -8000, "springLength": 100}},
+    "interaction": {"hover": True, "tooltipDelay": 200, "selectable": True}
+}
+
+# Write HTML dashboard
+with open("ideological_lab_intervention.html", "w") as f:
+    f.write(html_template.format(
+        max_iter=len(animation_data)-1,
+        brittle_nodes=json.dumps(fide_report["brittle_nodes"], indent=2),
+        shock_impacts=json.dumps(fide_report["shock_impacts"], indent=2),
+        loop_activity=json.dumps(fide_report["loop_activity"], indent=2),
+        nodes=json.dumps(nodes_json),
+        edges=json.dumps(edges_json),
+        animation_data=json.dumps(animation_data),
+        options=json.dumps(options_json)
+    ))
+
+# Plot Loose_Change_9_11 dynamics (static view)
+fide_nodes = {node: [] for node in final_iteration}
+for snapshot in animation_data:
+    for node_name, attrs in snapshot["nodes"].items():
+        fide_nodes[node_name].append({
+            "iteration": snapshot["iteration"],
+            "fragility": attrs["influence"] - attrs["trust"],
+            "influence": attrs["influence"],
+            "trust": attrs["trust"],
+            "reach": attrs["reach"],
+            "active_shock": any(node_name in shock[2] for shock in snapshot["shocks"])
+        })
+
+plt.figure(figsize=(10, 6))
+plt.plot([h["influence"] for h in fide_nodes["Loose_Change_9_11"]], label="Influence", linewidth=2)
+plt.plot([h["trust"] for h in fide_nodes["Loose_Change_9_11"]], label="Trust", linestyle="--")
+plt.plot([h["reach"] for h in fide_nodes["Loose_Change_9_11"]], label="Reach", linestyle=":")
+for h in fide_nodes["Loose_Change_9_11"]:
+    if h["active_shock"]:
+        plt.axvline(x=h["iteration"], color='red', linestyle='--', alpha=0.3, label="Shock" if h["iteration"] == 50 else "")
+plt.axvline(x=50, color='blue', linestyle='-', alpha=0.5, label="Media_Exposé")
+plt.title("Loose_Change_9_11 Dynamics with Targeted Media_Exposé (Iteration 50)")
+plt.xlabel("Iteration")
+plt.ylabel("Value (0-1)")
+plt.legend()
+plt.tight_layout()
+plt.show()
