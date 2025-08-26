@@ -1,0 +1,37 @@
+#!/bin/bash
+# deploy.sh - Deployment script for resonant media portal
+
+# Build the project
+echo "Building resonant media portal..."
+npm run build
+
+# Check if build succeeded
+if [ $? -ne 0 ]; then
+    echo "Build failed!"
+    exit 1
+fi
+
+# Create deployment directory
+DEPLOY_DIR="./deploy/$(date +%Y%m%d_%H%M%S)"
+mkdir -p $DEPLOY_DIR
+
+# Copy necessary files
+cp -r dist/ $DEPLOY_DIR/
+cp package.json $DEPLOY_DIR/
+cp .env $DEPLOY_DIR/ 2>/dev/null || echo ".env file not found, skipping"
+
+# Install production dependencies
+cd $DEPLOY_DIR
+npm install --only=production
+
+# Create startup script
+cat > start.sh << 'EOF'
+#!/bin/bash
+cd "$(dirname "$0")"
+node index.js
+EOF
+
+chmod +x start.sh
+
+echo "Deployment created in $DEPLOY_DIR"
+echo "To start: cd $DEPLOY_DIR && ./start.sh"
