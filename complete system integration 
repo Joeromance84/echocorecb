@@ -1,0 +1,79 @@
+// index.ts - Main entry point
+import { ResonantMediaSystem } from './main';
+import { EnhancedMediaProducer } from './enhanced-media-producer';
+import { AdvancedResonanceSecurity } from './advanced-resonance-security';
+import { PortalUIController } from './portal-ui-controller';
+import { ConfigManager } from './config-manager';
+
+class ResonantNetworkOrchestrator {
+  private system: ResonantMediaSystem;
+  private config: ConfigManager;
+  private uiController: PortalUIController;
+  
+  constructor() {
+    this.config = new ConfigManager();
+    this.system = new ResonantMediaSystem(this.config.get());
+    this.uiController = new PortalUIController();
+    
+    this.setupEventHandlers();
+  }
+  
+  private setupEventHandlers() {
+    this.system.on('systemReady', () => {
+      console.log('Resonant media system is ready');
+      this.onSystemReady();
+    });
+    
+    this.system.on('mediaStreamCreated', (data: any) => {
+      console.log(`Media stream created: ${data.streamId}`);
+    });
+    
+    this.system.on('transportChanged', (data: any) => {
+      console.log(`Transport protocol changed to: ${data.protocol}`);
+    });
+    
+    this.config.on('configUpdated', (newConfig: any) => {
+      console.log('Configuration updated');
+      // Potentially restart system components with new config
+    });
+  }
+  
+  private async onSystemReady() {
+    // Start UI controller
+    await this.uiController.start(this.config.get('ui.port') || 3000);
+    
+    // Create initial portal
+    const portalId = await this.system.createMediaPortal('Main Portal', {
+      maxConnections: 100,
+      allowedOrigins: ['*'],
+      requireAuth: false
+    });
+    
+    console.log(`Main portal created with ID: ${portalId}`);
+    
+    // Additional initialization code...
+  }
+  
+  async start() {
+    try {
+      await this.system.initialize();
+    } catch (error) {
+      console.error('Failed to initialize system:', error);
+      process.exit(1);
+    }
+  }
+  
+  async gracefulShutdown() {
+    console.log('Shutting down resonant network...');
+    // Cleanup resources, close connections, etc.
+    process.exit(0);
+  }
+}
+
+// Start the system
+const orchestrator = new ResonantNetworkOrchestrator();
+orchestrator.start();
+
+// Handle graceful shutdown
+process.on('SIGINT', () => orchestrator.gracefulShutdown());
+process.on('SIGTERM', () => orchestrator.gracefulShutdown());
