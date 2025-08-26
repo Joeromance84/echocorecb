@@ -1,0 +1,104 @@
+// config-manager.ts
+import fs from 'fs';
+import { EventEmitter } from 'events';
+
+export class ConfigManager extends EventEmitter {
+  private config: any = {};
+  private configPath: string;
+  
+  constructor(configPath: string = './config.json') {
+    super();
+    this.configPath = configPath;
+    this.loadConfig();
+  }
+  
+  private loadConfig() {
+    try {
+      if (fs.existsSync(this.configPath)) {
+        const data = fs.readFileSync(this.configPath, 'utf8');
+        this.config = JSON.parse(data);
+      } else {
+        this.config = this.getDefaultConfig();
+        this.saveConfig();
+      }
+    } catch (error) {
+      console.error('Error loading config:', error);
+      this.config = this.getDefaultConfig();
+    }
+  }
+  
+  private getDefaultConfig() {
+    return {
+      system: {
+        name: 'ResonantMediaPortal',
+        version: '1.0.0',
+        port: 8080
+      },
+      media: {
+        defaultResolution: '1920x1080',
+        supportedFormats: ['mp4', 'webm', 'ogg'],
+        maxBitrate: '5000k'
+      },
+      security: {
+        resonanceAlgorithm: 'RSA-PSS',
+        keyRotationInterval: '7d',
+        requireSignature: true
+      },
+      transports: {
+        preferred: 'websocket',
+        fallbacks: ['webtransport', 'sse', 'http3']
+      },
+      portals: {
+        maxPortals: 100,
+        defaultLifetime: '24h'
+      }
+    };
+  }
+  
+  private saveConfig() {
+    try {
+      fs.writeFileSync(this.configPath, JSON.stringify(this.config, null, 2));
+      this.emit('configUpdated', this.config);
+    } catch (error) {
+      console.error('Error saving config:', error);
+    }
+  }
+  
+  get(key: string = '') {
+    if (!key) return this.config;
+    
+    const keys = key.split('.');
+    let value = this.config;
+    
+    for (const k of keys) {
+      if (value && typeof value === 'object' && k in value) {
+        value = value[k];
+      } else {
+        return undefined;
+      }
+    }
+    
+    return value;
+  }
+  
+  set(key: string, value: any) {
+    const keys = key.split('.');
+    let configRef = this.config;
+    
+    for (let i = 0; i < keys.length - 1; i++) {
+      const k = keys[i];
+      if (!(k in configRef)) {
+        configRef[k] = {};
+      }
+      configRef = configRef[k];
+    }
+    
+    configRef[keys[keys.length - 1]] = value;
+    this.saveConfig();
+  }
+  
+  update(newConfig: any) {
+    this.config = { ...this.config, ...newConfig };
+    this.saveConfig();
+  }
+}
