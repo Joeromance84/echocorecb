@@ -1,0 +1,113 @@
+// Enhanced transport-broker.ts with more protocols
+import WebSocket from 'ws';
+import { WebTransport } from '@fails-components/webtransport';
+import { EventEmitter } from 'events';
+
+export class EnhancedTransportBroker extends EventEmitter {
+  private transports: Map<string, any> = new Map();
+  private activeTransport: string = '';
+  private config: any = {};
+  
+  constructor() {
+    super();
+    this.registerTransports();
+  }
+  
+  private registerTransports() {
+    // WebSocket transport
+    this.transports.set('websocket', {
+      connect: async (config: any) => {
+        const ws = new WebSocket(config.url);
+        return new Promise((resolve, reject) => {
+          ws.on('open', resolve);
+          ws.on('error', reject);
+        });
+      },
+      send: (data: any) => { /* implementation */ },
+      close: () => { /* implementation */ }
+    });
+    
+    // WebTransport implementation
+    this.transports.set('webtransport', {
+      connect: async (config: any) => {
+        const transport = new WebTransport(config.url);
+        await transport.ready;
+        return transport;
+      },
+      send: (data: any) => { /* implementation */ },
+      close: () => { /* implementation */ }
+    });
+    
+    // HTTP/3 implementation
+    this.transports.set('http3', {
+      connect: async (config: any) => { /* implementation */ },
+      send: (data: any) => { /* implementation */ },
+      close: () => { /* implementation */ }
+    });
+    
+    // Add custom resonant protocol
+    this.transports.set('resonant', {
+      connect: async (config: any) => { /* implementation */ },
+      send: (data: any) => { /* implementation */ },
+      close: () => { /* implementation */ }
+    });
+  }
+  
+  async negotiateBestTransport(): Promise<string> {
+    // Test each transport for latency, bandwidth, reliability
+    const results = await Promise.allSettled(
+      Array.from(this.transports.keys()).map(async (protocol) => {
+        const start = Date.now();
+        try {
+          await this.testTransport(protocol);
+          return {
+            protocol,
+            latency: Date.now() - start,
+            success: true
+          };
+        } catch (error) {
+          return {
+            protocol,
+            latency: Date.now() - start,
+            success: false,
+            error
+          };
+        }
+      })
+    );
+    
+    // Select the best available transport
+    const best = results
+      .filter((r: any) => r.value.success)
+      .sort((a: any, b: any) => a.value.latency - b.value.latency)[0];
+    
+    this.activeTransport = best.value.protocol;
+    return this.activeTransport;
+  }
+  
+  async sendData(data: any, priority: number = 0): Promise<void> {
+    if (!this.activeTransport) {
+      await this.negotiateBestTransport();
+    }
+    
+    const transport = this.transports.get(this.activeTransport);
+    await transport.send(this.prepareData(data, priority));
+  }
+  
+  private prepareData(data: any, priority: number): any {
+    // Add resonance signature, encryption, compression
+    return {
+      payload: data,
+      metadata: {
+        timestamp: Date.now(),
+        priority,
+        signature: this.generateResonanceSignature(data)
+      }
+    };
+  }
+  
+  private generateResonanceSignature(data: any): string {
+    // Implement your resonant signature algorithm
+    return ''; // Your custom implementation
+  }
+}
