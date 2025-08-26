@@ -1,0 +1,44 @@
+// media-producer.ts - Enhanced media capture and encoding
+import { MediaStream, MediaRecorder } from 'node-web-streams';
+import ffmpeg from 'fluent-ffmpeg';
+import { v4 as uuidv4 } from 'uuid';
+
+export class MediaProducer {
+  private streams: Map<string, MediaStream> = new Map();
+  private recorders: Map<string, MediaRecorder> = new Map();
+  
+  async captureScreen(): Promise<string> {
+    const streamId = uuidv4();
+    // Implementation for screen capture (varies by platform)
+    const stream = await (navigator.mediaDevices as any).getDisplayMedia({
+      video: true,
+      audio: true
+    });
+    this.streams.set(streamId, stream);
+    return streamId;
+  }
+  
+  async captureCamera(): Promise<string> {
+    const streamId = uuidv4();
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: true,
+      audio: true
+    });
+    this.streams.set(streamId, stream);
+    return streamId;
+  }
+  
+  async startRecording(streamId: string, options: any = {}): Promise<string> {
+    const stream = this.streams.get(streamId);
+    if (!stream) throw new Error('Stream not found');
+    
+    const recorderId = uuidv4();
+    const recorder = new MediaRecorder(stream, options);
+    this.recorders.set(recorderId, recorder);
+    
+    recorder.start();
+    return recorderId;
+  }
+  
+  // Additional methods for audio, sensor data, file uploads, etc.
+}
