@@ -1,0 +1,82 @@
+// portal-ui-controller.ts
+import express from 'express';
+import path from 'path';
+
+export class PortalUIController {
+  private app: express.Application;
+  private portals: Map<string, any> = new Map();
+  
+  constructor() {
+    this.app = express();
+    this.setupUI();
+  }
+  
+  private setupUI() {
+    // Serve static files
+    this.app.use(express.static(path.join(__dirname, 'public')));
+    
+    // API endpoints for UI control
+    this.app.get('/api/portals', (req, res) => {
+      const portals = Array.from(this.portals.values()).map(portal => ({
+        id: portal.id,
+        name: portal.name,
+        connections: portal.connections.size,
+        createdAt: portal.createdAt
+      }));
+      
+      res.json(portals);
+    });
+    
+    this.app.post('/api/portals/:id/control', (req, res) => {
+      const { id } = req.params;
+      const { action, parameters } = req.body;
+      
+      const portal = this.portals.get(id);
+      if (!portal) {
+        return res.status(404).json({ error: 'Portal not found' });
+      }
+      
+      // Handle control actions
+      switch (action) {
+        case 'broadcast':
+          this.handleBroadcast(portal, parameters);
+          break;
+        case 'restart':
+          this.handleRestart(portal);
+          break;
+        case 'updateConfig':
+          this.handleConfigUpdate(portal, parameters);
+          break;
+        default:
+          return res.status(400).json({ error: 'Unknown action' });
+      }
+      
+      res.json({ status: 'success' });
+    });
+  }
+  
+  private handleBroadcast(portal: any, parameters: any) {
+    // Implementation for broadcasting to portal connections
+  }
+  
+  private handleRestart(portal: any) {
+    // Implementation for restarting portal
+  }
+  
+  private handleConfigUpdate(portal: any, config: any) {
+    // Implementation for updating portal configuration
+  }
+  
+  registerPortal(portal: any) {
+    this.portals.set(portal.id, portal);
+  }
+  
+  start(port: number = 3000): Promise<void> {
+    return new Promise((resolve) => {
+      this.app.listen(port, () => {
+        console.log(`Portal UI controller running on port ${port}`);
+        resolve();
+      });
+    });
+  }
+}
