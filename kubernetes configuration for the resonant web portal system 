@@ -1,0 +1,52 @@
+# resonant-portal-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: resonant-portal
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: resonant-portal
+  template:
+    metadata:
+      labels:
+        app: resonant-portal
+    spec:
+      containers:
+      - name: portal
+        image: resonant-portal:latest
+        ports:
+        - containerPort: 8080
+        - containerPort: 8443
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: RESONANCE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: resonance-secrets
+              key: resonance-key
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: resonant-portal-service
+spec:
+  selector:
+    app: resonant-portal
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+  - name: https
+    port: 443
+    targetPort: 8443
+  type: LoadBalancer
