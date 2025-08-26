@@ -1,0 +1,142 @@
+// main.ts - System Orchestrator
+import { MediaProducer } from './media-producer';
+import { EnhancedTransportBroker } from './transport-broker';
+import { PortalManager } from './portal-manager';
+import { ResonanceSecurity } from './resonance-security';
+import { DevicePortalManager } from './device-portal';
+
+export class ResonantMediaSystem {
+  private mediaProducer: MediaProducer;
+  private transportBroker: EnhancedTransportBroker;
+  private portalManager: PortalManager;
+  private security: ResonanceSecurity;
+  private deviceManager: DevicePortalManager;
+  
+  private activeSessions: Map<string, any> = new Map();
+  private config: any;
+  
+  constructor(config: any = {}) {
+    this.config = config;
+    this.mediaProducer = new MediaProducer();
+    this.transportBroker = new EnhancedTransportBroker();
+    this.portalManager = new PortalManager();
+    this.security = new ResonanceSecurity();
+    this.deviceManager = new DevicePortalManager();
+    
+    this.initializeEventHandlers();
+  }
+  
+  private initializeEventHandlers() {
+    // Media events
+    this.mediaProducer.on('streamCreated', (streamId: string) => {
+      this.emit('mediaStreamCreated', { streamId });
+    });
+    
+    // Transport events
+    this.transportBroker.on('transportChanged', (protocol: string) => {
+      this.emit('transportChanged', { protocol });
+    });
+    
+    // Security events
+    this.security.on('resonanceVerified', (data: any) => {
+      this.emit('resonanceVerified', data);
+    });
+  }
+  
+  async initialize(): Promise<void> {
+    // Generate resonance keys
+    await this.security.generateResonanceKey('system');
+    
+    // Start portal manager
+    await this.portalManager.start(this.config.port || 8080);
+    
+    // Initialize transport broker
+    await this.transportBroker.negotiateBestTransport();
+    
+    this.emit('systemReady');
+  }
+  
+  async createMediaPortal(name: string, options: any = {}): Promise<string> {
+    const portalId = this.portalManager.createPortal(name, options);
+    
+    // Add media-specific routes to the portal
+    const portal = this.portalManager.getPortal(portalId);
+    
+    portal.router.post('/stream/start', async (req, res) => {
+      try {
+        const { type, config } = req.body;
+        let streamId: string;
+        
+        if (type === 'screen') {
+          streamId = await this.mediaProducer.captureScreen();
+        } else if (type === 'camera') {
+          streamId = await this.mediaProducer.captureCamera();
+        } else {
+          throw new Error('Unsupported stream type');
+        }
+        
+        const sessionId = uuidv4();
+        this.activeSessions.set(sessionId, { streamId, portalId });
+        
+        res.json({ sessionId, streamId });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+    
+    portal.router.post('/stream/stop', async (req, res) => {
+      try {
+        const { sessionId } = req.body;
+        const session = this.activeSessions.get(sessionId);
+        
+        if (!session) {
+          throw new Error('Session not found');
+        }
+        
+        await this.mediaProducer.stopStream(session.streamId);
+        this.activeSessions.delete(sessionId);
+        
+        res.json({ status: 'stopped' });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+    
+    return portalId;
+  }
+  
+  async connectToDevice(deviceType: string, config: any): Promise<string> {
+    let deviceId: string;
+    
+    switch (deviceType) {
+      case 'bluetooth':
+        deviceId = await this.deviceManager.connectBluetooth(config.deviceId);
+        break;
+      case 'serial':
+        deviceId = await this.deviceManager.connectSerial(config.path, config.baudRate);
+        break;
+      default:
+        throw new Error('Unsupported device type');
+    }
+    
+    return deviceId;
+  }
+  
+  async broadcastToPortals(data: any, portals: string[] = []): Promise<void> {
+    const signedData = await this.security.signData(data, 'system');
+    const preparedData = this.transportBroker.prepareData(signedData, 0);
+    
+    // If no specific portals provided, send to all
+    const targetPortals = portals.length > 0 ? portals : Array.from(this.portalManager.getPortals().keys());
+    
+    for (const portalId of targetPortals) {
+      const portal = this.portalManager.getPortal(portalId);
+      if (portal && portal.connections) {
+        // Send to all connections in the portal
+        for (const connection of portal.connections) {
+          await this.transportBroker.sendData(preparedData);
+        }
+      }
+    }
+  }
+}
