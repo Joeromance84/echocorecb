@@ -1,0 +1,81 @@
+// portal-manager.ts - Create and manage web portals
+import express from 'express';
+import { Server } from 'http';
+import { WebSocketServer } from 'ws';
+
+export class PortalManager {
+  private portals: Map<string, any> = new Map();
+  private app: express.Application;
+  private server: Server | null = null;
+  
+  constructor() {
+    this.app = express();
+    this.setupRoutes();
+  }
+  
+  private setupRoutes() {
+    this.app.use(express.json());
+    
+    this.app.post('/portal', (req, res) => {
+      const { name, config } = req.body;
+      const portalId = this.createPortal(name, config);
+      res.json({ portalId, status: 'created' });
+    });
+    
+    this.app.delete('/portal/:id', (req, res) => {
+      const { id } = req.params;
+      this.destroyPortal(id);
+      res.json({ status: 'destroyed' });
+    });
+    
+    this.app.get('/portal/:id', (req, res) => {
+      const { id } = req.params;
+      const portal = this.portals.get(id);
+      res.json(portal || { error: 'Portal not found' });
+    });
+  }
+  
+  createPortal(name: string, config: any = {}): string {
+    const portalId = uuidv4();
+    const portal = {
+      id: portalId,
+      name,
+      config,
+      createdAt: new Date(),
+      connections: new Set(),
+      // Add portal-specific express routes
+      router: express.Router()
+    };
+    
+    // Setup portal-specific routes
+    portal.router.get('/status', (req, res) => {
+      res.json({ status: 'active', connections: portal.connections.size });
+    });
+    
+    this.app.use(`/portal/${portalId}`, portal.router);
+    this.portals.set(portalId, portal);
+    
+    return portalId;
+  }
+  
+  destroyPortal(portalId: string): boolean {
+    const portal = this.portals.get(portalId);
+    if (!portal) return false;
+    
+    // Clean up connections
+    portal.connections.forEach(connection => {
+      connection.terminate();
+    });
+    
+    return this.portals.delete(portalId);
+  }
+  
+  start(port: number = 8080): Promise<void> {
+    return new Promise((resolve) => {
+      this.server = this.app.listen(port, () => {
+        console.log(`Portal manager running on port ${port}`);
+        resolve();
+      });
+    });
+  }
+}
