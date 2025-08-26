@@ -1,0 +1,109 @@
+// system-monitor.ts
+import { EventEmitter } from 'events';
+
+export class SystemMonitor extends EventEmitter {
+  private metrics: Map<string, any> = new Map();
+  private healthChecks: Map<string, () => Promise<boolean>> = new Map();
+  private checkInterval: NodeJS.Timeout | null = null;
+  
+  constructor() {
+    super();
+    this.setupDefaultMetrics();
+    this.setupDefaultHealthChecks();
+  }
+  
+  private setupDefaultMetrics() {
+    this.metrics.set('system.uptime', 0);
+    this.metrics.set('system.memory.usage', 0);
+    this.metrics.set('system.cpu.usage', 0);
+    this.metrics.set('network.connections.active', 0);
+    this.metrics.set('media.streams.active', 0);
+    this.metrics.set('portals.active', 0);
+  }
+  
+  private setupDefaultHealthChecks() {
+    this.healthChecks.set('system.memory', async () => {
+      const memoryUsage = process.memoryUsage();
+      return memoryUsage.heapUsed / memoryUsage.heapTotal < 0.9;
+    });
+    
+    this.healthChecks.set('system.cpu', async () => {
+      // CPU health check implementation
+      return true;
+    });
+  }
+  
+  startMonitoring(interval: number = 5000) {
+    this.checkInterval = setInterval(() => {
+      this.updateMetrics();
+      this.runHealthChecks();
+    }, interval);
+  }
+  
+  stopMonitoring() {
+    if (this.checkInterval) {
+      clearInterval(this.checkInterval);
+      this.checkInterval = null;
+    }
+  }
+  
+  private updateMetrics() {
+    // Update system metrics
+    this.metrics.set('system.uptime', process.uptime());
+    
+    const memoryUsage = process.memoryUsage();
+    this.metrics.set('system.memory.usage', memoryUsage.heapUsed / memoryUsage.heapTotal);
+    
+    // Additional metric updates would go here
+  }
+  
+  private async runHealthChecks() {
+    const results: Map<string, boolean> = new Map();
+    
+    for (const [name, check] of this.healthChecks) {
+      try {
+        const healthy = await check();
+        results.set(name, healthy);
+        
+        if (!healthy) {
+          this.emit('healthAlert', { check: name, status: 'unhealthy' });
+        }
+      } catch (error) {
+        results.set(name, false);
+        this.emit('healthAlert', { 
+          check: name, 
+          status: 'error', 
+          error: error.message 
+        });
+      }
+    }
+    
+    this.emit('healthCheckComplete', results);
+  }
+  
+  registerMetric(name: string, value: any) {
+    this.metrics.set(name, value);
+  }
+  
+  registerHealthCheck(name: string, check: () => Promise<boolean>) {
+    this.healthChecks.set(name, check);
+  }
+  
+  getMetric(name: string): any {
+    return this.metrics.get(name);
+  }
+  
+  getAllMetrics(): any {
+    return Object.fromEntries(this.metrics);
+  }
+  
+  generateReport(): any {
+    return {
+      timestamp: new Date().toISOString(),
+      metrics: this.getAllMetrics(),
+      uptime: process.uptime(),
+      version: process.version,
+      platform: process.platform
+    };
+  }
+}
