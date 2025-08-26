@@ -1,0 +1,81 @@
+// enhanced-media-producer.ts
+import { MediaProducer } from './media-producer';
+import ffmpeg from 'fluent-ffmpeg';
+import { PassThrough } from 'stream';
+
+export class EnhancedMediaProducer extends MediaProducer {
+  private processors: Map<string, any> = new Map();
+  
+  async startRecordingWithProcessing(streamId: string, processingOptions: any = {}): Promise<string> {
+    const stream = this.streams.get(streamId);
+    if (!stream) throw new Error('Stream not found');
+    
+    const recorderId = await this.startRecording(streamId);
+    const processorId = uuidv4();
+    
+    // Create processing pipeline
+    const inputStream = new PassThrough();
+    const outputStream = new PassThrough();
+    
+    // Configure FFmpeg processing based on options
+    let command = ffmpeg(inputStream);
+    
+    if (processingOptions.watermark) {
+      command = command.videoFilters({
+        filter: 'overlay',
+        options: {
+          x: processingOptions.watermark.x || 10,
+          y: processingOptions.watermark.y || 10
+        }
+      });
+    }
+    
+    if (processingOptions.compression) {
+      command = command.videoBitrate(processingOptions.compression.bitrate || '1000k');
+    }
+    
+    if (processingOptions.format) {
+      command = command.format(processingOptions.format || 'mp4');
+    }
+    
+    // Start processing
+    command.pipe(outputStream, { end: true });
+    
+    this.processors.set(processorId, {
+      input: inputStream,
+      output: outputStream,
+      command
+    });
+    
+    // Pipe recorder output to processor
+    const recorder = this.recorders.get(recorderId);
+    recorder.on('data', (data: any) => {
+      inputStream.write(data);
+    });
+    
+    recorder.on('end', () => {
+      inputStream.end();
+    });
+    
+    return processorId;
+  }
+  
+  getProcessedStream(processorId: string): PassThrough {
+    const processor = this.processors.get(processorId);
+    if (!processor) throw new Error('Processor not found');
+    
+    return processor.output;
+  }
+  
+  async addAudioMix(sourceStreamId: string, targetProcessorId: string): Promise<void> {
+    const sourceStream = this.streams.get(sourceStreamId);
+    const processor = this.processors.get(targetProcessorId);
+    
+    if (!sourceStream || !processor) {
+      throw new Error('Stream or processor not found');
+    }
+    
+    // Implementation for audio mixing
+    // This would involve more complex FFmpeg configuration
+  }
+}
