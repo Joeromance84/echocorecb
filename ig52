@@ -1,0 +1,288 @@
+import numpy as np
+import pandas as pd
+import networkx as nx
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from scipy.special import expit as sigmoid
+import time
+
+# Start timing
+start_time = time.time()
+
+# --- Parameters ---
+quarters = 12
+iterations = 500  # Reduced for testing; scale to 1000 for production
+scenarios = {
+    "High_Impact": {"arb_range": (0.4, 0.6), "ndr_range": (0.03, 0.04), "rcf_range": (0.7, 0.96), "aggression_spike": 0.3},
+    "Medium_Impact": {"arb_range": (0.2, 0.4), "ndr_range": (0.02, 0.03), "rcf_range": (0.5, 0.8), "aggression_spike": 0.2},
+    "Low_Impact": {"arb_range": (0.1, 0.2), "ndr_range": (0.01, 0.02), "rcf_range": (0.3, 0.5), "aggression_spike": 0.1}
+}
+
+# Initialize RRE/FIDE graph
+G = nx.DiGraph()
+nodes = [
+    ("Elite_Power", {"value": 0.90, "influence": 0.90, "reach": 0.95}),
+    ("Global_Majority", {"value": 0.80, "influence": 0.80, "reach": 0.85}),
+    ("Fear_Response", {"value": 0.0, "influence": 0.85, "reach": 0.80}),
+    ("Systemic_Correction", {"value": 0.0, "influence": 0.75, "reach": 0.80}),
+    ("Africa_Resource_Block", {"value": 0.0, "influence": 0.70, "reach": 0.75}),
+    ("NonDollar_Rail", {"value": 0.0, "influence": 0.65, "reach": 0.70}),
+    ("RCF", {"value": 0.3, "influence": 0.80, "reach": 0.85})
+]
+G.add_nodes_from(nodes)
+edges = [
+    ("Elite_Power", "Global_Majority", {"weight": -0.8, "flow_type": "Elite_Aggression_Flow"}),
+    ("Global_Majority", "Fear_Response", {"weight": 0.7, "growth_rate": 0.02}),
+    ("Africa_Resource_Block", "Systemic_Correction", {"weight": 0.8}),
+    ("NonDollar_Rail", "Systemic_Correction", {"weight": 0.6, "growth_rate": 0.03}),
+    ("Fear_Response", "Elite_Power", {"weight": -0.85}),
+    ("RCF", "Systemic_Correction", {"weight": 0.7})
+]
+G.add_edges_from(edges)
+
+# Vectorized simulation function
+def run_simulation(arb_range, ndr_range, rcf_range, aggression_spike):
+    EP = np.full((iterations, quarters), 0.90)
+    GM = np.full((iterations, quarters), 0.80)
+    FR = np.zeros((iterations, quarters))
+    SC = np.zeros((iterations, quarters))
+    USD_Decline = np.zeros((iterations, quarters))
+    Investor_Exit = np.zeros((iterations, quarters))
+    Elite_Loss = np.zeros((iterations, quarters))
+    Retreat_Prob = np.zeros((iterations, quarters))
+    Poverty_Increase = np.zeros((iterations, quarters))
+    Crime_Increase = np.zeros((iterations, quarters))
+    ARB = np.random.uniform(arb_range[0], arb_range[1], (iterations, quarters))
+    NDR = np.random.uniform(ndr_range[0], ndr_range[1], (iterations, quarters))
+    RCF = np.random.uniform(rcf_range[0], rcf_range[1], (iterations, quarters))
+    
+    EP_floor, GM_cap, FR_cap, SC_cap = 0.28, 0.97, 0.93, 1.0
+    
+    for q in range(quarters):
+        aggression = aggression_spike if q == 0 else 0.0
+        GM[:, q] = np.minimum(GM[:, q-1] + 0.7 * (1 + aggression) * (1 - GM[:, q-1]/GM_cap) * sigmoid(RCF[:, q]), GM_cap) if q > 0 else GM[:, q]
+        FR[:, q] = np.minimum(FR[:, q-1] + 0.7 * (GM[:, q] - (GM[:, q-1] if q > 0 else GM[:, q])), FR_cap) if q > 0 else FR[:, q]
+        EP[:, q] = np.maximum(EP[:, q-1] - 0.85 * sigmoid(FR[:, q] - (FR[:, q-1] if q > 0 else FR[:, q])), EP_floor) if q > 0 else EP[:, q]
+        SC[:, q] = np.minimum(SC[:, q-1] + (0.4 * ARB[:, q] + 0.3 * NDR[:, q] + 0.3 * RCF[:, q]) * sigmoid(SC[:, q-1] if q > 0 else SC[:, q]), SC_cap) if q > 0 else SC[:, q]
+        USD_Decline[:, q] = np.minimum((USD_Decline[:, q-1] if q > 0 else USD_Decline[:, q]) + SC[:, q] * 100 * (1 + np.exp(NDR[:, q])), 90.0)
+        Investor_Exit[:, q] = np.minimum(0.5 * SC[:, q] + 0.3 * RCF[:, q], 0.45) * 100
+        sanction_prob = sigmoid(0.5 * RCF[:, q] + 0.3 * ARB[:, q] + 0.2 * NDR[:, q])
+        Elite_Loss[:, q] = np.where(RCF[:, q] > 0.8, 100e9 * sanction_prob, 50e9 * sanction_prob) / 1e9
+        Retreat_Prob[:, q] = sigmoid(FR[:, q]) * 100
+        Poverty_Increase[:, q] = 0.2 * SC[:, q] * 100
+        Crime_Increase[:, q] = 0.15 * SC[:, q] * 100
+    
+    results = []
+    for i in range(iterations):
+        df = pd.DataFrame({
+            "Quarter": np.arange(1, quarters + 1),
+            "EP": EP[i, :],
+            "GM": GM[i, :],
+            "FR": FR[i, :],
+            "SC": SC[i, :],
+            "USD_Decline": USD_Decline[i, :],
+            "Investor_Exit": Investor_Exit[i, :],
+            "Elite_Loss_Billion": Elite_Loss[i, :],
+            "Retreat_Probability": Retreat_Prob[i, :],
+            "Poverty_Increase": Poverty_Increase[i, :],
+            "Crime_Increase": Crime_Increase[i, :],
+            "RCF": RCF[i, :],
+            "ARB": ARB[i, :] * 100,
+            "Iteration": i + 1
+        })
+        results.append(df)
+    return pd.concat(results, ignore_index=True)
+
+# Run simulations
+all_scenario_results = {}
+for scenario, params in scenarios.items():
+    df_sim = run_simulation(params["arb_range"], params["ndr_range"], params["rcf_range"], params["aggression_spike"])
+    df_sim["Scenario"] = scenario
+    all_scenario_results[scenario] = df_sim
+
+df_all = pd.concat(all_scenario_results.values(), ignore_index=True)
+
+# Probabilistic analysis
+summary = df_all.groupby(["Scenario", "Quarter"]).agg({
+    "EP": ["mean", "min", "max", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90), lambda x: np.percentile(x, 25), lambda x: np.percentile(x, 75)],
+    "GM": ["mean", "min", "max", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90), lambda x: np.percentile(x, 25), lambda x: np.percentile(x, 75)],
+    "FR": ["mean", "min", "max", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90), lambda x: np.percentile(x, 25), lambda x: np.percentile(x, 75)],
+    "SC": ["mean", "min", "max", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90), lambda x: np.percentile(x, 25), lambda x: np.percentile(x, 75)],
+    "USD_Decline": ["mean", "min", "max", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90), lambda x: np.percentile(x, 25), lambda x: np.percentile(x, 75)],
+    "Investor_Exit": ["mean", "min", "max", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90), lambda x: np.percentile(x, 25), lambda x: np.percentile(x, 75)],
+    "Elite_Loss_Billion": ["mean", "min", "max", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90), lambda x: np.percentile(x, 25), lambda x: np.percentile(x, 75)],
+    "Retreat_Probability": ["mean", "min", "max", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90), lambda x: np.percentile(x, 25), lambda x: np.percentile(x, 75)],
+    "Poverty_Increase": ["mean", "min", "max"],
+    "Crime_Increase": ["mean", "min", "max"]
+}).reset_index()
+summary.columns = ["Scenario", "Quarter",
+                  "EP_mean", "EP_min", "EP_max", "EP_10th", "EP_90th", "EP_25th", "EP_75th",
+                  "GM_mean", "GM_min", "GM_max", "GM_10th", "GM_90th", "GM_25th", "GM_75th",
+                  "FR_mean", "FR_min", "FR_max", "FR_10th", "FR_90th", "FR_25th", "FR_75th",
+                  "SC_mean", "SC_min", "SC_max", "SC_10th", "SC_90th", "SC_25th", "SC_75th",
+                  "USD_Decline_mean", "USD_Decline_min", "USD_Decline_max", "USD_Decline_10th", "USD_Decline_90th", "USD_Decline_25th", "USD_Decline_75th",
+                  "Investor_Exit_mean", "Investor_Exit_min", "Investor_Exit_max", "Investor_Exit_10th", "Investor_Exit_90th", "Investor_Exit_25th", "Investor_Exit_75th",
+                  "Elite_Loss_mean", "Elite_Loss_min", "Elite_Loss_max", "Elite_Loss_10th", "Elite_Loss_90th", "Elite_Loss_25th", "Elite_Loss_75th",
+                  "Retreat_Prob_mean", "Retreat_Prob_min", "Retreat_Prob_max", "Retreat_Prob_10th", "Retreat_Prob_90th", "Retreat_Prob_25th", "Retreat_Prob_75th",
+                  "Poverty_Increase_mean", "Poverty_Increase_min", "Poverty_Increase_max",
+                  "Crime_Increase_mean", "Crime_Increase_min", "Crime_Increase_max"]
+
+# Intervention alerts
+alerts = []
+for scenario in scenarios:
+    df_scenario = summary[summary["Scenario"] == scenario]
+    for q in range(3, 6):  # Q4-Q6
+        sc_mean = df_scenario[df_scenario["Quarter"] == q + 1]["SC_mean"].iloc[0]
+        retreat_prob = df_scenario[df_scenario["Quarter"] == q + 1]["Retreat_Prob_mean"].iloc[0]
+        poverty_increase = df_scenario[df_scenario["Quarter"] == q + 1]["Poverty_Increase_mean"].iloc[0]
+        crime_increase = df_scenario[df_scenario["Quarter"] == q + 1]["Crime_Increase_mean"].iloc[0]
+        if sc_mean >= 0.7 or retreat_prob >= 50:
+            alerts.append({
+                "Scenario": scenario,
+                "Quarter": q + 1,
+                "Alert": f"Primary: SC={sc_mean:.2f}, Retreat_Prob={retreat_prob:.1f}%"
+            })
+        if poverty_increase > 15 or crime_increase > 10:
+            alerts.append({
+                "Scenario": scenario,
+                "Quarter": q + 1,
+                "Alert": f"Secondary: Poverty={poverty_increase:.1f}%, Crime={crime_increase:.1f}%"
+            })
+
+# Save results
+df_all.to_csv("usd_collapse_multi_scenario.csv", index=False)
+summary.to_csv("usd_collapse_summary.csv", index=False)
+pd.DataFrame(alerts).to_csv("intervention_alerts.csv", index=False)
+
+# --- Summary Dashboard ---
+fig = make_subplots(
+    rows=4, cols=2,
+    subplot_titles=(
+        "Elite Power vs Global Majority",
+        "Fear Response vs Systemic Correction",
+        "USD Decline vs Investor Exit",
+        "Elite Loss vs Retreat Probability",
+        "Retreat Probability Heatmap (Q4)",
+        "Retreat Probability Heatmap (Q6)",
+        "Intervention Alerts",
+        "Probabilistic Outcomes"
+    ),
+    specs=[
+        [{"type": "xy"}, {"type": "xy"}],
+        [{"type": "xy"}, {"type": "xy"}],
+        [{"type": "heatmap"}, {"type": "heatmap"}],
+        [{"type": "table"}, {"type": "table"}]
+    ],
+    vertical_spacing=0.1
+)
+
+colors = {"High_Impact": "solid", "Medium_Impact": "dash", "Low_Impact": "dot"}
+for scenario in scenarios:
+    df_scenario = summary[summary["Scenario"] == scenario]
+    # Plot 1: EP vs GM
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["EP_mean"], name=f"{scenario} EP",
+                             line=dict(color="red", dash=colors[scenario])), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["EP_25th"], fill=None, mode='lines',
+                             line=dict(color="red", dash=colors[scenario]), showlegend=False), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["EP_75th"], fill='tonexty', mode='lines',
+                             line=dict(color="red", dash=colors[scenario]), showlegend=False, opacity=0.2), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["GM_mean"], name=f"{scenario} GM",
+                             line=dict(color="blue", dash=colors[scenario])), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["GM_25th"], fill=None, mode='lines',
+                             line=dict(color="blue", dash=colors[scenario]), showlegend=False), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["GM_75th"], fill='tonexty', mode='lines',
+                             line=dict(color="blue", dash=colors[scenario]), showlegend=False, opacity=0.2), row=1, col=1)
+    
+    # Plot 2: FR vs SC
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["FR_mean"], name=f"{scenario} FR",
+                             line=dict(color="orange", dash=colors[scenario])), row=1, col=2)
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["FR_25th"], fill=None, mode='lines',
+                             line=dict(color="orange", dash=colors[scenario]), showlegend=False), row=1, col=2)
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["FR_75th"], fill='tonexty', mode='lines',
+                             line=dict(color="orange", dash=colors[scenario]), showlegend=False, opacity=0.2), row=1, col=2)
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["SC_mean"], name=f"{scenario} SC",
+                             line=dict(color="green", dash=colors[scenario])), row=1, col=2)
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["SC_25th"], fill=None, mode='lines',
+                             line=dict(color="green", dash=colors[scenario]), showlegend=False), row=1, col=2)
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["SC_75th"], fill='tonexty', mode='lines',
+                             line=dict(color="green", dash=colors[scenario]), showlegend=False, opacity=0.2), row=1, col=2)
+    
+    # Plot 3: USD Decline vs Investor Exit
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["USD_Decline_mean"], name=f"{scenario} USD Decline",
+                             line=dict(color="purple", dash=colors[scenario])), row=2, col=1)
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["USD_Decline_25th"], fill=None, mode='lines',
+                             line=dict(color="purple", dash=colors[scenario]), showlegend=False), row=2, col=1)
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["USD_Decline_75th"], fill='tonexty', mode='lines',
+                             line=dict(color="purple", dash=colors[scenario]), showlegend=False, opacity=0.2), row=2, col=1)
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["Investor_Exit_mean"], name=f"{scenario} Investor Exit",
+                             line=dict(color="brown", dash=colors[scenario])), row=2, col=1)
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["Investor_Exit_25th"], fill=None, mode='lines',
+                             line=dict(color="brown", dash=colors[scenario]), showlegend=False), row=2, col=1)
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["Investor_Exit_75th"], fill='tonexty', mode='lines',
+                             line=dict(color="brown", dash=colors[scenario]), showlegend=False, opacity=0.2), row=2, col=1)
+    
+    # Plot 4: Elite Loss vs Retreat Probability
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["Elite_Loss_mean"], name=f"{scenario} Elite Loss",
+                             line=dict(color="black", dash=colors[scenario])), row=2, col=2)
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["Elite_Loss_25th"], fill=None, mode='lines',
+                             line=dict(color="black", dash=colors[scenario]), showlegend=False), row=2, col=2)
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["Elite_Loss_75th"], fill='tonexty', mode='lines',
+                             line=dict(color="black", dash=colors[scenario]), showlegend=False, opacity=0.2), row=2, col=2)
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["Retreat_Prob_mean"], name=f"{scenario} Retreat Prob",
+                             line=dict(color="cyan", dash=colors[scenario])), row=2, col=2)
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["Retreat_Prob_25th"], fill=None, mode='lines',
+                             line=dict(color="cyan", dash=colors[scenario]), showlegend=False), row=2, col=2)
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["Retreat_Prob_75th"], fill='tonexty', mode='lines',
+                             line=dict(color="cyan", dash=colors[scenario]), showlegend=False, opacity=0.2), row=2, col=2)
+
+# Heatmaps for Q4 and Q6
+for q in [4, 6]:
+    heatmap_data = df_all[df_all["Quarter"] == q].groupby([pd.cut(df_all[df_all["Quarter"] == q]["RCF"], bins=20),
+                                                         pd.cut(df_all[df_all["Quarter"] == q]["ARB"], bins=20)]).agg({"Retreat_Probability": "mean"}).reset_index()
+    heatmap_data["RCF_bin"] = heatmap_data["RCF"].apply(lambda x: x.mid)
+    heatmap_data["ARB_bin"] = heatmap_data["ARB"].apply(lambda x: x.mid)
+    heatmap_pivot = heatmap_data.pivot_table(index="RCF_bin", columns="ARB_bin", values="Retreat_Probability")
+    fig.add_trace(go.Heatmap(z=heatmap_pivot.values, x=heatmap_pivot.columns, y=heatmap_pivot.index, colorscale="Viridis",
+                             showscale=True), row=3, col=1 if q == 4 else 2)
+
+# Intervention alerts table
+fig.add_trace(go.Table(
+    header=dict(values=["Scenario", "Quarter", "Alert"], font=dict(size=12), align="center"),
+    cells=dict(values=[pd.DataFrame(alerts)["Scenario"], pd.DataFrame(alerts)["Quarter"], pd.DataFrame(alerts)["Alert"]],
+               align="left")
+), row=4, col=1)
+
+# Probabilistic outcomes table
+prob_table = summary.groupby("Scenario").agg({
+    "Elite_Loss_mean": ["mean", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)],
+    "Retreat_Prob_mean": ["mean", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)],
+    "USD_Decline_mean": ["mean", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)],
+    "Poverty_Increase_mean": ["mean"],
+    "Crime_Increase_mean": ["mean"]
+}).reset_index()
+prob_table.columns = ["Scenario", "Elite_Loss_Mean", "Elite_Loss_10th", "Elite_Loss_90th",
+                      "Retreat_Prob_Mean", "Retreat_Prob_10th", "Retreat_Prob_90th",
+                      "USD_Decline_Mean", "USD_Decline_10th", "USD_Decline_90th",
+                      "Poverty_Increase_Mean", "Crime_Increase_Mean"]
+fig.add_trace(go.Table(
+    header=dict(values=["Scenario", "Elite Loss ($B)", "Retreat Prob (%)", "USD Decline (%)", "Poverty (%)", "Crime (%)"],
+                font=dict(size=12), align="center"),
+    cells=dict(values=[
+        prob_table["Scenario"],
+        prob_table["Elite_Loss_Mean"].round(1).astype(str) + " (" + prob_table["Elite_Loss_10th"].round(1).astype(str) + "-" + prob_table["Elite_Loss_90th"].round(1).astype(str) + ")",
+        prob_table["Retreat_Prob_Mean"].round(1).astype(str) + " (" + prob_table["Retreat_Prob_10th"].round(1).astype(str) + "-" + prob_table["Retreat_Prob_90th"].round(1).astype(str) + ")",
+        prob_table["USD_Decline_Mean"].round(1).astype(str) + " (" + prob_table["USD_Decline_10th"].round(1).astype(str) + "-" + prob_table["USD_Decline_90th"].round(1).astype(str) + ")",
+        prob_table["Poverty_Increase_Mean"].round(1),
+        prob_table["Crime_Increase_Mean"].round(1)
+    ], align="left")
+), row=4, col=2)
+
+fig.update_layout(title_text="USD Collapse Summary Dashboard (Q1-Q12, 2025-2030)", height=1200, showlegend=True)
+fig.write_html("usd_collapse_summary_dashboard.html")
+
+# Print results
+print("\nProbabilistic Outcomes (5-Year Average):")
+print(prob_table)
+print("\nIntervention Alerts (Q4-Q6):")
+print(pd.DataFrame(alerts))
+print(f"\nExecution Time: {time.time() - start_time:.2f} seconds")
