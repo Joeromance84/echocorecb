@@ -1,0 +1,211 @@
+# Copyright 2025 Logan Royce Lorentz
+# ideological_lab_quantum.py - Dashboard for Quantum AI HITL Drift Management
+
+from pyvis.network import Network
+import json
+from matplotlib.colors import Normalize
+import numpy as np
+
+# Load simulation data
+with open("hitl_quantum_simulation.json", "r") as f:
+    animation_data = json.load(f)
+with open("fide_quantum_report.json", "r") as f:
+    fide_report = json.load(f)
+with open("conspiracy_edges.json", "w") as f:
+    json.dump({"edges": flows}, f, indent=2)
+
+# Initialize PyVis network
+net = Network(height="800px", width="100%", directed=True, notebook=False)
+
+# Normalize for visualization
+norm_influence = Normalize(vmin=0, vmax=1)
+norm_fragility = Normalize(vmin=0, vmax=1)
+norm_weight = Normalize(vmin=0, vmax=1)
+
+# Add nodes
+final_iteration = animation_data[-1]["nodes"]
+for node, attrs in final_iteration.items():
+    fragility = attrs["influence"] - attrs["trust"]
+    color = "#800080" if node == "Camouflaged_Agent" else plt.cm.RdYlGn(1 - norm_fragility(fragility))
+    color_hex = "#800080" if node == "Camouflaged_Agent" else "#{:02x}{:02x}{:02x}".format(int(color[0]*255), int(color[1]*255), int(color[2]*255))
+    net.add_node(
+        node,
+        label=node,
+        size=10 + 40 * norm_influence(attrs["influence"]),
+        color=color_hex,
+        title=f"Influence: {attrs['influence']:.2f}, Trust: {attrs['trust']:.2f}, Reach: {attrs['reach']:.2f}, Sentiment: {attrs['sentiment']:.2f}, Fragility: {fragility:.2f}"
+    )
+
+# Add edges
+for edge in flows:
+    edge_type = edge[2]["type"]
+    color = "#0000FF" if edge_type in ["Conspiracy_Propagation", "Covert_Propagation"] else "#00FF00" if edge_type == "Scrutiny" else "#808080"
+    net.add_edge(
+        edge[0],
+        edge[1],
+        value=1 + 4 * norm_weight(edge[2]["weight"]),
+        color=color,
+        title=f"{edge_type} (Weight: {edge[2]['weight']:.2f})"
+    )
+
+# Generate HTML dashboard
+html_template = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Ideological Lab: Quantum AI HITL Drift Management</title>
+    <script type="text/javascript" src="https://unpkg.com/vis-network@9.1.2/dist/vis-network.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/vis-network@9.1.2/dist/dist/vis-network.min.css" />
+    <style>
+        body { font-family: Arial; }
+        #mynetwork { width: 65%; height: 800px; float: left; border: 1px solid black; }
+        #sidebar { width: 33%; float: right; padding: 10px; }
+        #slider { width: 100%; }
+        #scenario { width: 100%; margin-top: 10px; }
+        #fide-report { margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div id="mynetwork"></div>
+    <div id="sidebar">
+        <h3>Ideological Lab Controls</h3>
+        <label for="iteration">Iteration:</label>
+        <input type="range" id="slider" min="0" max="{max_iter}" value="0">
+        <label for="scenario">Scenario:</label>
+        <select id="scenario">
+            <option value="0.4">Trust Drop 0.4 (Q-score=0.9)</option>
+            <option value="0.2">Trust Drop 0.2 (Q-score=0.85)</option>
+        </select>
+        <div id="fide-report">
+            <h4>FIDE Quantum HITL Report</h4>
+            <h5>Key Metrics</h5>
+            <pre>Collapse Efficiency: {collapse_efficiency} iterations\nAgent Exposure: {agent_exposure} iterations\nDrift Recovery: {drift_recovery} iterations\nNetwork Stability: {network_stability:.2f}\nIntervention Cost: {intervention_cost:.2f}</pre>
+            <h5>Brittle Nodes</h5>
+            <pre>{brittle_nodes}</pre>
+            <h5>Shock Impacts</h5>
+            <pre>{shock_impacts}</pre>
+            <h5>Loop Activity</h5>
+            <pre>{loop_activity}</pre>
+            <h5>HITL Feedback</h5>
+            <pre>{hitl_feedback}</pre>
+            <h5>Quantum Feedback</h5>
+            <pre>{quantum_feedback}</pre>
+            <h5>Drift Severity</h5>
+            <pre>{drift_severity}</pre>
+            <h5>Feature Importance</h5>
+            <pre>{feature_importance}</pre>
+        </div>
+    </div>
+    <script>
+        var nodes = {nodes};
+        var edges = {edges};
+        var animationData = {animation_data};
+        var container = document.getElementById('mynetwork');
+        var data = {{ nodes: new vis.DataSet([]), edges: new vis.DataSet(edges) }};
+        var options = {options};
+        var network = new vis.Network(container, data, options);
+        
+        function updateNetwork(iteration, trust_drop) {{
+            var snapshot = animationData[iteration];
+            data.nodes.clear();
+            Object.keys(snapshot.nodes).forEach(function(node) {{
+                var attrs = snapshot.nodes[node];
+                var fragility = attrs.influence - attrs.trust;
+                var color = node === 'Camouflaged_Agent' ? '#800080' : `hsl(${Math.min(120, 120 * (1 - fragility))}, 70%, 50%)`;
+                var size = 10 + 40 * attrs.influence;
+                if (snapshot.shocks.some(s => s[2] === node && s[1] === 'HITL_Detection')) {{
+                    size *= 1.5;
+                    color = '#FF0000';
+                }} else if (snapshot.quantum_feedback.some(f => f[0] === 'Quantum_Drift_Alert' && f[1] === node)) {{
+                    color = '#FFA500';
+                }}
+                data.nodes.add({{
+                    id: node,
+                    label: node,
+                    size: size,
+                    color: color,
+                    title: `Influence: ${attrs.influence.toFixed(2)}, Trust: ${attrs.trust.toFixed(2)}, Reach: ${attrs.reach.toFixed(2)}, Sentiment: ${attrs.sentiment.toFixed(2)}, Fragility: ${fragility.toFixed(2)}`
+                }});
+            }});
+            var shocks = snapshot.shocks.map(s => s[1] + ' (' + s[2] + ')').join(', ');
+            var hitl_feedback = snapshot.hitl_feedback.map(f => f[0] + ': ' + f[1] + ' (' + f[2] + ')').join('\\n');
+            var quantum_feedback = snapshot.quantum_feedback.map(f => f[0] + ': ' + f[1] + ' (' + f[2] + ')').join('\\n');
+            var r4_activity = {r4_activity};
+            var b5_activity = {b5_activity};
+            data.edges.update(edges.map(edge => {{
+                var color = edge.title.includes('Conspiracy_Propagation') || edge.title.includes('Covert_Propagation') ? `rgba(0, 0, 255, ${r4_activity[iteration]})` : 
+                            edge.title.includes('Scrutiny') ? `rgba(0, 255, 0, ${b5_activity[iteration]})` : '#808080';
+                return {{ id: edge.from + '_' + edge.to, from: edge.from, to: edge.to, value: edge.value, color: color, title: edge.title }};
+            }}));
+            document.getElementById('fide-report').innerHTML = `
+                <h4>FIDE Quantum HITL Report (Iteration ${iteration})</h4>
+                <h5>Key Metrics</h5>
+                <pre>Collapse Efficiency: {collapse_efficiency} iterations\nAgent Exposure: {agent_exposure} iterations\nDrift Recovery: {drift_recovery} iterations\nNetwork Stability: {network_stability:.2f}\nIntervention Cost: {intervention_cost:.2f}</pre>
+                <h5>Brittle Nodes</h5><pre>{brittle_nodes}</pre>
+                <h5>Shock Impacts</h5><pre>${shocks || 'None'}</pre>
+                <h5>Loop Activity</h5><pre>{loop_activity}</pre>
+                <h5>HITL Feedback</h5><pre>${hitl_feedback || 'None'}</pre>
+                <h5>Quantum Feedback</h5><pre>${quantum_feedback || 'None'}</pre>
+                <h5>Drift Severity</h5><pre>${snapshot.drift_severity.toFixed(2)}</pre>
+                <h5>Feature Importance</h5><pre>{feature_importance}</pre>
+            `;
+        }}
+        
+        document.getElementById('slider').addEventListener('input', function(e) {{
+            var trust_drop = document.getElementById('scenario').value;
+            updateNetwork(parseInt(e.target.value), trust_drop);
+        }});
+        
+        document.getElementById('scenario').addEventListener('change', function(e) {{
+            var trust_drop = e.target.value;
+            updateNetwork(parseInt(document.getElementById('slider').value), trust_drop);
+        }});
+        
+        updateNetwork(0, 0.4);
+    </script>
+</body>
+</html>
+"""
+
+# Generate loop activity for edge coloring
+r4_activity = []
+b5_activity = []
+for snapshot in animation_data:
+    r4_count = sum(1 for node in ["Loose_Change_9_11", "Media", "Social_Media", "Camouflaged_Agent"] if snapshot["nodes"][node]["reach"] > 0.5)
+    b5_count = sum(1 for node in ["Academic_Critique", "Independent_Investigators"] if snapshot["nodes"][node]["influence"] > 0.4)
+    r4_activity.append(min(r4_count / 4, 1.0))
+    b5_activity.append(min(b5_count / 2, 1.0))
+
+# Format data
+nodes_json = {node: {"id": node, "label": node} for node in final_iteration}
+edges_json = [{"from": edge[0], "to": edge[1], "value": edge[2]["weight"], "title": edge[2]["type"]} for edge in flows]
+options_json = {
+    "nodes": {"font": {"size": 12}},
+    "edges": {"arrows": {"to": {"enabled": True}}, "smooth": {"enabled": True, "type": "continuous"}},
+    "physics": {"enabled": True, "barnesHut": {"gravitationalConstant": -8000, "springLength": 100}},
+    "interaction": {"hover": True, "tooltipDelay": 200, "selectable": True}
+}
+
+# Write HTML
+with open("ideological_lab_quantum.html", "w") as f:
+    f.write(html_template.format(
+        max_iter=len(animation_data)-1,
+        collapse_efficiency=fide_report["collapse_efficiency"],
+        agent_exposure=fide_report["agent_exposure"],
+        drift_recovery=fide_report["drift_recovery"],
+        network_stability=fide_report["network_stability"],
+        intervention_cost=fide_report["intervention_cost"],
+        brittle_nodes=json.dumps(fide_report["brittle_nodes"], indent=2),
+        shock_impacts=json.dumps(fide_report["shock_impacts"], indent=2),
+        loop_activity=json.dumps(fide_report["loop_activity"], indent=2),
+        hitl_feedback=json.dumps(animation_data[0]["hitl_feedback"], indent=2),
+        quantum_feedback=json.dumps(animation_data[0]["quantum_feedback"], indent=2),
+        drift_severity=animation_data[0]["drift_severity"],
+        feature_importance=json.dumps(fide_report["feature_importance"], indent=2),
+        nodes=json.dumps(nodes_json),
+        edges=json.dumps(edges_json),
+        animation_data=json.dumps(animation_data),
+        options=json.dumps(options_json),
+        r4_activity=json.dumps(r4_activity),
+        b5_activity=json.dumps(b5_activity)
+    ))
