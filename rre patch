@@ -1,0 +1,178 @@
+{
+  "patch_description": "JSON patch to integrate elite overreach, global backlash, and systemic consequences into RRE/FIDE. Adds nodes, flows, and Scenario: Elite Collapse.",
+  "new_nodes": [
+    {
+      "id": "Elite_Power",
+      "type": "dominant_group",
+      "attributes": {
+        "influence": 0.90,
+        "reach": 0.95,
+        "description": "Western/white supremacist elites"
+      }
+    },
+    {
+      "id": "Global_Majority",
+      "type": "coalition",
+      "attributes": {
+        "influence": 0.80,
+        "reach": 0.85,
+        "description": "Non-Western populations (97%)"
+      }
+    },
+    {
+      "id": "Fear_Response",
+      "type": "elite_reaction",
+      "attributes": {
+        "influence": 0.85,
+        "reach": 0.80,
+        "description": "Elite response to existential threats"
+      }
+    },
+    {
+      "id": "Systemic_Correction",
+      "type": "consequence",
+      "attributes": {
+        "influence": 0.75,
+        "reach": 0.80,
+        "description": "Natural systemic consequences"
+      }
+    }
+  ],
+  "new_edges": [
+    {
+      "source": "Elite_Power",
+      "target": "Global_Majority",
+      "attributes": {
+        "flow_type": "Elite_Aggression_Flow",
+        "weight": -0.8,
+        "growth_rate": 0.0,
+        "description": "Exploitation/atrocities"
+      }
+    },
+    {
+      "source": "Global_Majority",
+      "target": "Fear_Response",
+      "attributes": {
+        "flow_type": "Backlash_Flow",
+        "weight": 0.7,
+        "growth_rate": 0.02,
+        "description": "Backlash via resources/diplomacy"
+      }
+    },
+    {
+      "source": "Africa_Resource_Block",
+      "target": "Commodity_Markets",
+      "attributes": {
+        "flow_type": "Resource_Redirection_Flow",
+        "weight": 0.8,
+        "growth_rate": 0.0,
+        "description": "Commodity embargo to markets"
+      }
+    },
+    {
+      "source": "Commodity_Markets",
+      "target": "Systemic_Correction",
+      "attributes": {
+        "flow_type": "Resource_Redirection_Flow",
+        "weight": 0.8,
+        "growth_rate": 0.0,
+        "description": "Market disruption to correction"
+      }
+    },
+    {
+      "source": "BRICS_Consortium",
+      "target": "NonDollar_Rail",
+      "attributes": {
+        "flow_type": "Financial_Shift_Flow",
+        "weight": 0.6,
+        "growth_rate": 0.03,
+        "description": "Non-dollar rail adoption"
+      }
+    },
+    {
+      "source": "NonDollar_Rail",
+      "target": "Systemic_Correction",
+      "attributes": {
+        "flow_type": "Financial_Shift_Flow",
+        "weight": 0.6,
+        "growth_rate": 0.03,
+        "description": "Financial shift to correction"
+      }
+    },
+    {
+      "source": "Fear_Response",
+      "target": "Elite_Power",
+      "attributes": {
+        "flow_type": "Fear_to_Retreat_Flow",
+        "weight": -0.85,
+        "growth_rate": 0.0,
+        "description": "Fear reduces elite aggression"
+      }
+    },
+    {
+      "source": "Transnational_Justice",
+      "target": "Systemic_Correction",
+      "attributes": {
+        "flow_type": "Moral_Cost_Flow",
+        "weight": 0.7,
+        "growth_rate": 0.0,
+        "description": "Justice to systemic correction"
+      }
+    },
+    {
+      "source": "Diaspora_Mobilization",
+      "target": "Systemic_Correction",
+      "attributes": {
+        "flow_type": "Moral_Cost_Flow",
+        "weight": 0.7,
+        "growth_rate": 0.0,
+        "description": "Mobilization to correction"
+      }
+    }
+  ],
+  "scenario_elite_collapse": {
+    "id": "Scenario_Elite_Collapse",
+    "description": "Simulate elite overreach triggering global backlash via resource/financial pressure.",
+    "trigger": "20% increase in elite aggression (exploitation/atrocities)",
+    "parameters_sweep": {
+      "commodity_reduction_percent": [10, 20, 40, 60],
+      "duration_months": [1, 3, 6],
+      "nondollar_rail_adoption": [0.2, 0.3, 0.4],
+      "rcf_levels": [0.3, 0.6, 0.9]
+    },
+    "outputs": [
+      "elite_economic_loss_percent",
+      "usd_reserve_decline_percent",
+      "elite_retreat_probability",
+      "western_poverty_crime_increase_percent"
+    ],
+    "simulation_steps": [
+      "Increase Elite_Aggression_Flow by 20%",
+      "Activate Africa_Resource_Block embargo",
+      "Increase NonDollar_Rail adoption",
+      "Calculate RCF and sanction probability",
+      "Measure investor exit and elite retreat",
+      "Compute systemic correction impacts"
+    ]
+  },
+  "new_indicators": [
+    {
+      "name": "global_wealth_distribution",
+      "source": "Oxfam annual reports",
+      "type": "economic",
+      "update_frequency": "annual"
+    },
+    {
+      "name": "elite_fear_proxies",
+      "source": "SIPRI defense spending data",
+      "type": "political",
+      "update_frequency": "annual"
+    },
+    {
+      "name": "capital_flight_western_markets",
+      "source": "BIS quarterly reports",
+      "type": "economic",
+      "update_frequency": "quarterly"
+    }
+  ]
+}
