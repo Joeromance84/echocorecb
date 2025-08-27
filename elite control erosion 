@@ -1,0 +1,242 @@
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import time
+
+# Start timing
+start_time = time.time()
+
+# Assume df_strata from prior simulation (Scenario, Quarter, EP, PSI_{stratum}, FEI_{stratum}, SS_{stratum}, etc.)
+# Compute Elite Control Index (ECI)
+df_eci = df_strata.copy()
+df_eci["CL"] = 1.0 - 0.5 * df_eci[[f"PSI_{s}" for s in ["Low_Income", "Black", "Brown", "Children", "Elderly"]]].mean(axis=1)  # Cultural legitimacy
+df_eci["IE"] = 1.0 - 0.4 * df_eci[[f"SS_{s}" for s in ["Urban", "Black", "Brown", "Women"]]].mean(axis=1) - 0.3 * df_eci["Retreat_Probability"] / 100  # Institutional enforcement
+df_eci["ECI"] = 0.5 * df_eci["EP"] + 0.3 * df_eci["CL"] + 0.2 * df_eci["IE"]
+
+# Aggregate per Scenario, Quarter
+eci_summary = df_eci.groupby(["Scenario", "Quarter"]).agg({
+    "ECI": ["mean", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)],
+    "CL": ["mean", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)],
+    "IE": ["mean", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)],
+    **{f"PSI_{s}": ["mean"] for s in ["Low_Income", "Black", "Brown", "Children", "Elderly"]},
+    **{f"SS_{s}": ["mean"] for s in ["Urban", "Black", "Brown", "Women"]}
+}).reset_index()
+
+# Flatten column names
+columns = ["Scenario", "Quarter",
+           "ECI_mean", "ECI_10th", "ECI_90th",
+           "CL_mean", "CL_10th", "CL_90th",
+           "IE_mean", "IE_10th", "IE_90th"]
+for s in ["Low_Income", "Black", "Brown", "Children", "Elderly"]:
+    columns.append(f"PSI_{s}_mean")
+for s in ["Urban", "Black", "Brown", "Women"]:
+    columns.append(f"SS_{s}_mean")
+eci_summary.columns = columns
+
+# Tipping points
+tipping_points = []
+for scenario in df_eci["Scenario"].unique():
+    df_scenario = eci_summary[eci_summary["Scenario"] == scenario]
+    for q in range(1, 13):
+        eci_mean = df_scenario[df_scenario["Quarter"] == q]["ECI_mean"].iloc[0]
+        psi_mean = df_scenario[df_scenario["Quarter"] == q][[f"PSI_{s}_mean" for s in ["Low_Income", "Black", "Brown", "Children", "Elderly"]]].mean().mean()
+        ss_mean = df_scenario[df_scenario["Quarter"] == q][[f"SS_{s}_mean" for s in ["Urban", "Black", "Brown", "Women"]]].mean().mean()
+        outcome = ""
+        historical = ""
+        if eci_mean < 0.3 and psi_mean > 30 and ss_mean < 30:
+            outcome = "Voluntary Abdication"
+            historical = "Similar to negotiated transitions in post-apartheid South Africa (1994)."
+        elif eci_mean < 0.5 and psi_mean > 40 and ss_mean > 50:
+            outcome = "Conflict-Driven Collapse"
+            historical = "Parallels Argentina (2001-2002) with social unrest, elite displacement."
+        if outcome:
+            tipping_points.append({
+                "Scenario": scenario,
+                "Quarter": q,
+                "Outcome": outcome,
+                "ECI": f"{eci_mean:.2f}",
+                "PSI": f"{psi_mean:.1f}",
+                "SS": f"{ss_mean:.1f}",
+                "Historical": historical
+            })
+
+# Narrative summaries
+narratives = []
+for scenario in df_eci["Scenario"].unique():
+    df_scenario = eci_summary[eci_summary["Scenario"] == scenario]
+    for q in range(1, 13):
+        eci_mean = df_scenario[df_scenario["Quarter"] == q]["ECI_mean"].iloc[0]
+        cl_mean = df_scenario[df_scenario["Quarter"] == q]["CL_mean"].iloc[0]
+        ie_mean = df_scenario[df_scenario["Quarter"] == q]["IE_mean"].iloc[0]
+        psi_mean = df_scenario[df_scenario["Quarter"] == q][[f"PSI_{s}_mean" for s in ["Low_Income", "Black", "Brown", "Children", "Elderly"]]].mean().mean()
+        severity = "critical" if eci_mean < 0.3 else "high" if eci_mean < 0.5 else "moderate"
+        narrative = f"Q{q}, {scenario}: {severity.capitalize()} elite control erosion (ECI={eci_mean:.2f}). "
+        if eci_mean < 0.3:
+            narrative += f"Severe loss of legitimacy (CL={cl_mean:.2f}) and enforcement (IE={ie_mean:.2f}) due to {psi_mean:.1f}% PSI in vulnerable strata."
+        elif eci_mean < 0.5:
+            narrative += f"High pressure from {psi_mean:.1f}% PSI, weakening cultural (CL={cl_mean:.2f}) and institutional (IE={ie_mean:.2f}) support."
+        else:
+            narrative += f"Moderate decline in elite control, with PSI at {psi_mean:.1f}%."
+        narratives.append({"Scenario": scenario, "Quarter": q, "Narrative": narrative})
+
+# --- Interactive Dashboard ---
+fig = make_subplots(
+    rows=4, cols=2,
+    subplot_titles=(
+        "Elite Control Index (ECI)",
+        "Cultural Legitimacy (CL) & Institutional Enforcement (IE)",
+        "ECI vs PSI/SS (Q4)",
+        "ECI vs PSI/SS (Q6)",
+        "Tipping Points",
+        "Narrative Summaries",
+        "Systemic Metrics",
+        "Probabilistic Outcomes"
+    ),
+    specs=[
+        [{"type": "xy"}, {"type": "xy"}],
+        [{"type": "heatmap"}, {"type": "heatmap"}],
+        [{"type": "table"}, {"type": "table"}],
+        [{"type": "xy"}, {"type": "table"}]
+    ],
+    vertical_spacing=0.08
+)
+
+colors = {"High_Impact": "solid", "Medium_Impact": "dash", "Low_Impact": "dot"}
+
+# Line plots with dropdowns
+buttons = []
+for scenario in df_eci["Scenario"].unique():
+    df_s = eci_summary[eci_summary["Scenario"] == scenario]
+    traces = []
+    # ECI
+    traces.append(go.Scatter(x=df_s["Quarter"], y=df_s["ECI_mean"], name=f"{scenario} ECI",
+                             line=dict(color="purple", dash=colors[scenario]), visible=(scenario == "High_Impact")))
+    traces.append(go.Scatter(x=df_s["Quarter"], y=df_s["ECI_10th"], fill=None, mode='lines',
+                             line=dict(color="purple", dash=colors[scenario]), showlegend=False, visible=(scenario == "High_Impact")))
+    traces.append(go.Scatter(x=df_s["Quarter"], y=df_s["ECI_90th"], fill='tonexty', mode='lines',
+                             line=dict(color="purple", dash=colors[scenario]), showlegend=False, opacity=0.2, visible=(scenario == "High_Impact")))
+    # CL
+    traces.append(go.Scatter(x=df_s["Quarter"], y=df_s["CL_mean"], name=f"{scenario} CL",
+                             line=dict(color="blue", dash=colors[scenario]), visible=(scenario == "High_Impact")))
+    traces.append(go.Scatter(x=df_s["Quarter"], y=df_s["CL_10th"], fill=None, mode='lines',
+                             line=dict(color="blue", dash=colors[scenario]), showlegend=False, visible=(scenario == "High_Impact")))
+    traces.append(go.Scatter(x=df_s["Quarter"], y=df_s["CL_90th"], fill='tonexty', mode='lines',
+                             line=dict(color="blue", dash=colors[scenario]), showlegend=False, opacity=0.2, visible=(scenario == "High_Impact")))
+    # IE
+    traces.append(go.Scatter(x=df_s["Quarter"], y=df_s["IE_mean"], name=f"{scenario} IE",
+                             line=dict(color="red", dash=colors[scenario]), visible=(scenario == "High_Impact")))
+    traces.append(go.Scatter(x=df_s["Quarter"], y=df_s["IE_10th"], fill=None, mode='lines',
+                             line=dict(color="red", dash=colors[scenario]), showlegend=False, visible=(scenario == "High_Impact")))
+    traces.append(go.Scatter(x=df_s["Quarter"], y=df_s["IE_90th"], fill='tonexty', mode='lines',
+                             line=dict(color="red", dash=colors[scenario]), showlegend=False, opacity=0.2, visible=(scenario == "High_Impact")))
+    for trace in traces:
+        fig.add_trace(trace, row=1, col=1 if "ECI" in trace.name else 2)
+
+    # Heatmaps (Q4, Q6)
+    for q in [4, 6]:
+        heatmap_data = df_eci[df_eci["Quarter"] == q].groupby([
+            pd.cut(df_eci[df_eci["Quarter"] == q][[f"PSI_{s}" for s in ["Low_Income", "Black", "Brown", "Children", "Elderly"]]].mean(axis=1), bins=20),
+            pd.cut(df_eci[df_eci["Quarter"] == q][[f"SS_{s}" for s in ["Urban", "Black", "Brown", "Women"]]].mean(axis=1), bins=20)
+        ]).agg({"ECI": "mean"}).reset_index()
+        heatmap_data["PSI_bin"] = heatmap_data.iloc[:, 0].apply(lambda x: x.mid)
+        heatmap_data["SS_bin"] = heatmap_data.iloc[:, 1].apply(lambda x: x.mid)
+        heatmap_pivot = heatmap_data.pivot_table(index="PSI_bin", columns="SS_bin", values="ECI")
+        fig.add_trace(go.Heatmap(z=heatmap_pivot.values, x=heatmap_pivot.columns, y=heatmap_pivot.index,
+                                 colorscale="Viridis", showscale=True, visible=(scenario == "High_Impact")),
+                      row=2, col=1 if q == 4 else 2)
+
+    buttons.append(dict(
+        label=scenario,
+        method="update",
+        args=[{"visible": [s == scenario for s in df_eci["Scenario"].unique() for _ in range(9 + 2)] + [True] * 3},
+              {"title": f"Elite Control Erosion ({scenario}, Q1-Q12, 2025-2030)"}]
+    ))
+
+# Tipping points table
+fig.add_trace(go.Table(
+    header=dict(values=["Scenario", "Quarter", "Outcome", "ECI", "PSI", "SS", "Historical"], font=dict(size=12), align="center"),
+    cells=dict(values=[pd.DataFrame(tipping_points)["Scenario"], pd.DataFrame(tipping_points)["Quarter"],
+                       pd.DataFrame(tipping_points)["Outcome"], pd.DataFrame(tipping_points)["ECI"],
+                       pd.DataFrame(tipping_points)["PSI"], pd.DataFrame(tipping_points)["SS"],
+                       pd.DataFrame(tipping_points)["Historical"]], align="left"),
+    visible=True
+), row=3, col=1)
+
+# Narrative summaries
+fig.add_trace(go.Table(
+    header=dict(values=["Scenario", "Quarter", "Narrative"], font=dict(size=12), align="center"),
+    cells=dict(values=[pd.DataFrame(narratives)["Scenario"], pd.DataFrame(narratives)["Quarter"],
+                       pd.DataFrame(narratives)["Narrative"]], align="left"),
+    visible=True
+), row=3, col=2)
+
+# Systemic metrics (EP, GM, SC)
+systemic_summary = df_eci.groupby(["Scenario", "Quarter"]).agg({
+    "EP": ["mean"], "GM": ["mean"], "SC": ["mean"]
+}).reset_index()
+systemic_summary.columns = ["Scenario", "Quarter", "EP_mean", "GM_mean", "SC_mean"]
+for scenario in df_eci["Scenario"].unique():
+    df_s = systemic_summary[systemic_summary["Scenario"] == scenario]
+    fig.add_trace(go.Scatter(x=df_s["Quarter"], y=df_s["EP_mean"], name=f"{scenario} EP",
+                             line=dict(color="red", dash=colors[scenario]), visible=(scenario == "High_Impact")), row=4, col=1)
+    fig.add_trace(go.Scatter(x=df_s["Quarter"], y=df_s["GM_mean"], name=f"{scenario} GM",
+                             line=dict(color="blue", dash=colors[scenario]), visible=(scenario == "High_Impact")), row=4, col=1)
+    fig.add_trace(go.Scatter(x=df_s["Quarter"], y=df_s["SC_mean"], name=f"{scenario} SC",
+                             line=dict(color="green", dash=colors[scenario]), visible=(scenario == "High_Impact")), row=4, col=1)
+    buttons[[s for s, b in enumerate(buttons) if b["label"] == scenario][0]]["args"][0]["visible"].extend([scenario == "High_Impact"] * 3)
+
+# Probabilistic outcomes
+prob_table = df_eci.groupby("Scenario").agg({
+    "ECI": ["mean", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)],
+    "CL": ["mean"], "IE": ["mean"],
+    "Retreat_Probability": ["mean"],
+    "USD_Decline": ["mean"]
+}).reset_index()
+prob_table.columns = ["Scenario", "ECI_Mean", "ECI_10th", "ECI_90th", "CL_Mean", "IE_Mean", "Retreat_Prob_Mean", "USD_Decline_Mean"]
+fig.add_trace(go.Table(
+    header=dict(values=["Scenario", "ECI", "CL", "IE", "Retreat Prob (%)", "USD Decline (%)"], font=dict(size=12), align="center"),
+    cells=dict(values=[
+        prob_table["Scenario"],
+        prob_table["ECI_Mean"].round(2).astype(str) + " (" + prob_table["ECI_10th"].round(2).astype(str) + "-" + prob_table["ECI_90th"].round(2).astype(str) + ")",
+        prob_table["CL_Mean"].round(2),
+        prob_table["IE_Mean"].round(2),
+        prob_table["Retreat_Prob_Mean"].round(1),
+        prob_table["USD_Decline_Mean"].round(1)
+    ], align="left"),
+    visible=True
+), row=4, col=2)
+
+# Add dropdowns
+fig.update_layout(
+    title_text="Elite Control Erosion (High_Impact, Q1-Q12, 2025-2030)",
+    height=1200,
+    showlegend=True,
+    updatemenus=[dict(
+        buttons=buttons,
+        direction="down",
+        showactive=True,
+        x=0.1,
+        xanchor="left",
+        y=1.1,
+        yanchor="top"
+    )]
+)
+
+# Save and show
+fig.write_html("elite_control_erosion.html")
+
+# Save results
+df_eci.to_csv("elite_control_erosion_data.csv", index=False)
+eci_summary.to_csv("eci_summary.csv", index=False)
+pd.DataFrame(tipping_points).to_csv("tipping_points.csv", index=False)
+pd.DataFrame(narratives).to_csv("eci_narratives.csv", index=False)
+
+# Print results
+print("\nProbabilistic Outcomes (5-Year Average):")
+print(prob_table)
+print("\nTipping Points:")
+print(pd.DataFrame(tipping_points))
+print("\nNarrative Summaries (Sample):")
+print(pd.DataFrame(narratives).head(10))
+print(f"\nExecution Time: {time.time() - start_time:.2f} seconds")
