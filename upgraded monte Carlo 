@@ -1,0 +1,205 @@
+import numpy as np
+import pandas as pd
+import networkx as nx
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from scipy.special import sigmoid
+
+# --- Parameters ---
+quarters = 12
+iterations = 1000  # Monte Carlo runs per scenario
+scenarios = {
+    "High_Impact": {"arb_range": (0.4, 0.6), "ndr_range": (0.03, 0.04), "rcf_range": (0.7, 0.96), "aggression_spike": 0.3},
+    "Medium_Impact": {"arb_range": (0.2, 0.4), "ndr_range": (0.02, 0.03), "rcf_range": (0.5, 0.8), "aggression_spike": 0.2},
+    "Low_Impact": {"arb_range": (0.1, 0.2), "ndr_range": (0.01, 0.02), "rcf_range": (0.3, 0.5), "aggression_spike": 0.1}
+}
+
+# Initialize RRE/FIDE graph
+G = nx.DiGraph()
+nodes = [
+    ("Elite_Power", {"value": 0.90, "influence": 0.90, "reach": 0.95}),
+    ("Global_Majority", {"value": 0.80, "influence": 0.80, "reach": 0.85}),
+    ("Fear_Response", {"value": 0.0, "influence": 0.85, "reach": 0.80}),
+    ("Systemic_Correction", {"value": 0.0, "influence": 0.75, "reach": 0.80}),
+    ("Africa_Resource_Block", {"value": 0.0, "influence": 0.70, "reach": 0.75}),
+    ("NonDollar_Rail", {"value": 0.0, "influence": 0.65, "reach": 0.70}),
+    ("RCF", {"value": 0.3, "influence": 0.80, "reach": 0.85})
+]
+G.add_nodes_from(nodes)
+edges = [
+    ("Elite_Power", "Global_Majority", {"weight": -0.8, "flow_type": "Elite_Aggression_Flow"}),
+    ("Global_Majority", "Fear_Response", {"weight": 0.7, "growth_rate": 0.02}),
+    ("Africa_Resource_Block", "Systemic_Correction", {"weight": 0.8}),
+    ("NonDollar_Rail", "Systemic_Correction", {"weight": 0.6, "growth_rate": 0.03}),
+    ("Fear_Response", "Elite_Power", {"weight": -0.85}),
+    ("RCF", "Systemic_Correction", {"weight": 0.7})
+]
+G.add_edges_from(edges)
+
+# Simulation function with nonlinear feedback
+def run_simulation(arb_range, ndr_range, rcf_range, aggression_spike):
+    results = []
+    for i in range(iterations):
+        arb_seq = np.random.uniform(arb_range[0], arb_range[1], quarters)
+        ndr_seq = np.random.uniform(ndr_range[0], ndr_range[1], quarters)
+        rcf_seq = np.random.uniform(rcf_range[0], rcf_range[1], quarters)
+        
+        EP, GM, FR, SC = 0.90, 0.80, 0.0, 0.0
+        EP_floor, GM_cap, FR_cap, SC_cap = 0.28, 0.97, 0.93, 1.0
+        usd_decline, investor_exit = 0.0, 0.0
+        
+        sim_results = []
+        for q in range(quarters):
+            aggression = aggression_spike if q == 0 else 0.0
+            
+            # Nonlinear GM update (logistic growth)
+            gm_update = min(GM + 0.7 * (1 + aggression) * (1 - GM/GM_cap) * sigmoid(rcf_seq[q]), GM_cap)
+            
+            # Nonlinear FR update (sigmoid response)
+            fr_update = min(FR + 0.7 * (gm_update - GM) * sigmoid(arb_seq[q]), FR_cap)
+            
+            # Nonlinear EP decay (logistic)
+            ep_update = max(EP - 0.85 * sigmoid(fr_update - FR), EP_floor)
+            
+            # SC update with nonlinear weighting
+            sc_update = min(SC + (0.4 * arb_seq[q] + 0.3 * ndr_seq[q] + 0.3 * rcf_seq[q]) * sigmoid(sc_update), SC_cap)
+            
+            # USD decline (exponential with NDR)
+            usd_decline = min(usd_decline + sc_update * 100 * (1 + np.exp(ndr_seq[q])), 90.0)
+            
+            # Investor exit (RCF-driven)
+            investor_exit = min(0.5 * sc_update + 0.3 * rcf_seq[q], 0.45) * 100
+            
+            # Ethical penalty
+            sanction_prob, economic_loss = compute_ethical_penalty(rcf_seq[q], arb_seq[q], ndr_seq[q])
+            
+            # Retreat probability
+            retreat_prob = sigmoid(fr_update) * 100
+            
+            # Poverty and crime (scaled with SC)
+            poverty_increase = 0.2 * sc_update * 100
+            crime_increase = 0.15 * sc_update * 100
+            
+            sim_results.append({
+                "Quarter": q + 1,
+                "EP": ep_update,
+                "GM": gm_update,
+                "FR": fr_update,
+                "SC": sc_update,
+                "USD_Decline": usd_decline,
+                "Investor_Exit": investor_exit,
+                "Elite_Loss_Billion": economic_loss / 1e9,
+                "Retreat_Probability": retreat_prob,
+                "Poverty_Increase": poverty_increase,
+                "Crime_Increase": crime_increase,
+                "RCF": rcf_seq[q],
+                "Iteration": i + 1
+            })
+            
+            EP, GM, FR, SC = ep_update, gm_update, fr_update, sc_update
+        
+        results.append(pd.DataFrame(sim_results))
+    
+    return pd.concat(results, ignore_index=True)
+
+# Compute ethical penalty
+def compute_ethical_penalty(rcf, commodity_impact, ndr_adoption):
+    sanction_prob = sigmoid(0.5 * rcf + 0.3 * commodity_impact + 0.2 * ndr_adoption)
+    economic_loss = 100e9 * sanction_prob if rcf > 0.8 else 50e9 * sanction_prob
+    return sanction_prob, economic_loss
+
+# Run simulations for all scenarios
+all_scenario_results = {}
+for scenario, params in scenarios.items():
+    df_sim = run_simulation(params["arb_range"], params["ndr_range"], params["rcf_range"], params["aggression_spike"])
+    df_sim["Scenario"] = scenario
+    all_scenario_results[scenario] = df_sim
+
+# Combine all results
+df_all = pd.concat(all_scenario_results.values(), ignore_index=True)
+
+# Probabilistic analysis
+summary = df_all.groupby(["Scenario", "Quarter"]).agg({
+    "EP": ["mean", "min", "max", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)],
+    "GM": ["mean", "min", "max", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)],
+    "FR": ["mean", "min", "max", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)],
+    "SC": ["mean", "min", "max", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)],
+    "USD_Decline": ["mean", "min", "max", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)],
+    "Elite_Loss_Billion": ["mean", "min", "max", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)],
+    "Retreat_Probability": ["mean", "min", "max", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)],
+    "Poverty_Increase": ["mean"],
+    "Crime_Increase": ["mean"]
+}).reset_index()
+summary.columns = ["Scenario", "Quarter", "EP_mean", "EP_min", "EP_max", "EP_10th", "EP_90th",
+                  "GM_mean", "GM_min", "GM_max", "GM_10th", "GM_90th",
+                  "FR_mean", "FR_min", "FR_max", "FR_10th", "FR_90th",
+                  "SC_mean", "SC_min", "SC_max", "SC_10th", "SC_90th",
+                  "USD_Decline_mean", "USD_Decline_min", "USD_Decline_max", "USD_Decline_10th", "USD_Decline_90th",
+                  "Elite_Loss_mean", "Elite_Loss_min", "Elite_Loss_max", "Elite_Loss_10th", "Elite_Loss_90th",
+                  "Retreat_Prob_mean", "Retreat_Prob_min", "Retreat_Prob_max", "Retreat_Prob_10th", "Retreat_Prob_90th",
+                  "Poverty_Increase_mean", "Crime_Increase_mean"]
+
+# Actionable alerts
+alerts = []
+for scenario in scenarios:
+    df_scenario = summary[summary["Scenario"] == scenario]
+    for q in range(3, 6):  # Q4-Q6
+        sc_mean = df_scenario[df_scenario["Quarter"] == q + 1]["SC_mean"].iloc[0]
+        retreat_prob = df_scenario[df_scenario["Quarter"] == q + 1]["Retreat_Prob_mean"].iloc[0]
+        if sc_mean >= 0.7 or retreat_prob >= 50:
+            alerts.append({
+                "Scenario": scenario,
+                "Quarter": q + 1,
+                "Alert": f"Intervention window: SC={sc_mean:.2f}, Retreat_Prob={retreat_prob:.1f}%"
+            })
+
+# Save results
+df_all.to_csv("usd_collapse_multi_scenario.csv", index=False)
+summary.to_csv("usd_collapse_summary.csv", index=False)
+pd.DataFrame(alerts).to_csv("intervention_alerts.csv", index=False)
+
+# --- Dashboard Visualizations ---
+# Multi-scenario line plots
+fig = make_subplots(rows=2, cols=2, subplot_titles=("Elite Power vs Global Majority", "Fear Response vs Systemic Correction",
+                                                    "USD Decline vs Investor Exit", "Elite Loss vs Retreat Probability"))
+
+for scenario in scenarios:
+    df_scenario = summary[summary["Scenario"] == scenario]
+    # Plot 1: EP vs GM
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["EP_mean"], name=f"{scenario} EP", line=dict(color="red", dash="solid" if scenario == "High_Impact" else "dash" if scenario == "Medium_Impact" else "dot")), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["GM_mean"], name=f"{scenario} GM", line=dict(color="blue", dash="solid" if scenario == "High_Impact" else "dash" if scenario == "Medium_Impact" else "dot")), row=1, col=1)
+    # Plot 2: FR vs SC
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["FR_mean"], name=f"{scenario} FR", line=dict(color="orange", dash="solid" if scenario == "High_Impact" else "dash" if scenario == "Medium_Impact" else "dot")), row=1, col=2)
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["SC_mean"], name=f"{scenario} SC", line=dict(color="green", dash="solid" if scenario == "High_Impact" else "dash" if scenario == "Medium_Impact" else "dot")), row=1, col=2)
+    # Plot 3: USD Decline vs Investor Exit
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["USD_Decline_mean"], name=f"{scenario} USD Decline", line=dict(color="purple", dash="solid" if scenario == "High_Impact" else "dash" if scenario == "Medium_Impact" else "dot")), row=2, col=1)
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["Investor_Exit"], name=f"{scenario} Investor Exit", line=dict(color="brown", dash="solid" if scenario == "High_Impact" else "dash" if scenario == "Medium_Impact" else "dot")), row=2, col=1)
+    # Plot 4: Elite Loss vs Retreat Probability
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["Elite_Loss_mean"], name=f"{scenario} Elite Loss", line=dict(color="black", dash="solid" if scenario == "High_Impact" else "dash" if scenario == "Medium_Impact" else "dot")), row=2, col=2)
+    fig.add_trace(go.Scatter(x=df_scenario["Quarter"], y=df_scenario["Retreat_Prob_mean"], name=f"{scenario} Retreat Prob", line=dict(color="cyan", dash="solid" if scenario == "High_Impact" else "dash" if scenario == "Medium_Impact" else "dot")), row=2, col=2)
+
+fig.update_layout(title_text="USD Collapse Multi-Scenario Dashboard", height=800, showlegend=True)
+fig.write()
+
+# Heatmap: Retreat Probability by RCF and ARB
+heatmap_data = df_all.groupby(["Quarter", "RCF", "Africa_Resource_Block"]).agg({"Retreat_Probability": "mean"}).reset_index()
+heatmap_pivot = heatmap_data.pivot_table(index="RCF", columns="Africa_Resource_Block", values="Retreat_Probability")
+fig_heatmap = go.Figure(data=go.Heatmap(z=heatmap_pivot.values, x=heatmap_pivot.columns, y=heatmap_pivot.index, colorscale="Viridis"))
+fig_heatmap.update_layout(title="Retreat Probability Heatmap (RCF vs ARB)", xaxis_title="Commodity Embargo (%)", yaxis_title="RCF")
+fig_heatmap.show()
+
+# Probabilistic table
+prob_table = summary.groupby("Scenario").agg({
+    "Elite_Loss_mean": ["mean", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)],
+    "Retreat_Prob_mean": ["mean", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)],
+    "USD_Decline_mean": ["mean", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)]
+}).reset_index()
+prob_table.columns = ["Scenario", "Elite_Loss_Mean", "Elite_Loss_10th", "Elite_Loss_90th",
+                      "Retreat_Prob_Mean", "Retreat_Prob_10th", "Retreat_Prob_90th",
+                      "USD_Decline_Mean", "USD_Decline_10th", "USD_Decline_90th"]
+print("\nProbabilistic Outcomes (5-Year Average):")
+print(prob_table)
+
+# Print intervention alerts
+print("\nIntervention Alerts (Q4-Q6):")
+print(pd.DataFrame(alerts))
