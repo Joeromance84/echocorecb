@@ -1,0 +1,196 @@
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import time
+
+# Start timing
+start_time = time.time()
+
+# Assume df_all from prior simulation is available
+# df_all contains: Scenario, Quarter, USD_Decline, Poverty_Increase, Crime_Increase, Retreat_Probability, etc.
+
+# Define strata and weights
+strata = {
+    "Working_Class": {"USD_weight": 0.4, "Poverty_weight": 0.4, "Crime_weight": 0.15, "Retreat_weight": 0.05, "FEI_USD_mult": 0.5, "FEI_Poverty_mult": 1.0, "SS_Crime_mult": 0.5},
+    "Low_Income": {"USD_weight": 0.5, "Poverty_weight": 0.5, "Crime_weight": 0.1, "Retreat_weight": 0.05, "FEI_USD_mult": 0.6, "FEI_Poverty_mult": 1.2, "SS_Crime_mult": 0.4},
+    "Urban": {"USD_weight": 0.3, "Poverty_weight": 0.3, "Crime_weight": 0.3, "Retreat_weight": 0.1, "FEI_USD_mult": 0.4, "FEI_Poverty_mult": 0.8, "SS_Crime_mult": 0.7},
+    "Rural": {"USD_weight": 0.5, "Poverty_weight": 0.4, "Crime_weight": 0.1, "Retreat_weight": 0.05, "FEI_USD_mult": 0.6, "FEI_Poverty_mult": 1.0, "SS_Crime_mult": 0.3}
+}
+
+# Compute stratified metrics
+df_strata = df_all.copy()
+for stratum, weights in strata.items():
+    df_strata[f"FEI_{stratum}"] = df_strata["USD_Decline"] * weights["FEI_USD_mult"] + df_strata["Poverty_Increase"] * weights["FEI_Poverty_mult"]
+    df_strata[f"SS_{stratum}"] = df_strata["Crime_Increase"] * weights["SS_Crime_mult"] + df_strata["Retreat_Probability"] * 0.4
+    df_strata[f"PSI_{stratum}"] = (df_strata["USD_Decline"] * weights["USD_weight"] +
+                                   df_strata["Poverty_Increase"] * weights["Poverty_weight"] +
+                                   df_strata["Crime_Increase"] * weights["Crime_weight"] +
+                                   df_strata["Retreat_Probability"] * weights["Retreat_weight"])
+
+# Aggregate per Scenario, Quarter, and Stratum
+population_summary = df_strata.groupby(["Scenario", "Quarter"]).agg({
+    **{f"FEI_{stratum}": ["mean", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)] for stratum in strata},
+    **{f"SS_{stratum}": ["mean", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)] for stratum in strata},
+    **{f"PSI_{stratum}": ["mean", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)] for stratum in strata}
+}).reset_index()
+
+# Flatten column names
+columns = ["Scenario", "Quarter"]
+for stratum in strata:
+    columns.extend([f"FEI_{stratum}_mean", f"FEI_{stratum}_10th", f"FEI_{stratum}_90th",
+                    f"SS_{stratum}_mean", f"SS_{stratum}_10th", f"SS_{stratum}_90th",
+                    f"PSI_{stratum}_mean", f"PSI_{stratum}_10th", f"PSI_{stratum}_90th"])
+population_summary.columns = columns
+
+# --- Summary Dashboard ---
+fig = make_subplots(
+    rows=4, cols=2,
+    subplot_titles=(
+        "Food & Energy Insecurity by Stratum",
+        "Social Strain by Stratum",
+        "Population Stress Index by Stratum",
+        "PSI Contribution (High_Impact, Q6)",
+        "PSI by Stratum (Q4)",
+        "PSI by Stratum (Q6)",
+        "Intervention Alerts",
+        "Probabilistic Outcomes"
+    ),
+    specs=[
+        [{"type": "xy"}, {"type": "xy"}],
+        [{"type": "xy"}, {"type": "xy"}],
+        [{"type": "heatmap"}, {"type": "heatmap"}],
+        [{"type": "table"}, {"type": "table"}]
+    ],
+    vertical_spacing=0.1
+)
+
+colors = {"High_Impact": "solid", "Medium_Impact": "dash", "Low_Impact": "dot"}
+stratum_colors = {"Working_Class": "blue", "Low_Income": "red", "Urban": "green", "Rural": "purple"}
+
+# Line plots
+for scenario in df_strata["Scenario"].unique():
+    df_s = population_summary[population_summary["Scenario"] == scenario]
+    for stratum in strata:
+        # FEI
+        fig.add_trace(go.Scatter(x=df_s["Quarter"], y=df_s[f"FEI_{stratum}_mean"],
+                                 name=f"{scenario} {stratum} FEI", line=dict(color=stratum_colors[stratum], dash=colors[scenario])),
+                      row=1, col=1)
+        fig.add_trace(go.Scatter(x=df_s["Quarter"], y=df_s[f"FEI_{stratum}_10th"], fill=None, mode='lines',
+                                 line=dict(color=stratum_colors[stratum], dash=colors[scenario]), showlegend=False),
+                      row=1, col=1)
+        fig.add_trace(go.Scatter(x=df_s["Quarter"], y=df_s[f"FEI_{stratum}_90th"], fill='tonexty', mode='lines',
+                                 line=dict(color=stratum_colors[stratum], dash=colors[scenario]), showlegend=False, opacity=0.2),
+                      row=1, col=1)
+        # SS
+        fig.add_trace(go.Scatter(x=df_s["Quarter"], y=df_s[f"SS_{stratum}_mean"],
+                                 name=f"{scenario} {stratum} SS", line=dict(color=stratum_colors[stratum], dash=colors[scenario])),
+                      row=2, col=1)
+        fig.add_trace(go.Scatter(x=df_s["Quarter"], y=df_s[f"SS_{stratum}_10th"], fill=None, mode='lines',
+                                 line=dict(color=stratum_colors[stratum], dash=colors[scenario]), showlegend=False),
+                      row=2, col=1)
+        fig.add_trace(go.Scatter(x=df_s["Quarter"], y=df_s[f"SS_{stratum}_90th"], fill='tonexty', mode='lines',
+                                 line=dict(color=stratum_colors[stratum], dash=colors[scenario]), showlegend=False, opacity=0.2),
+                      row=2, col=1)
+        # PSI
+        fig.add_trace(go.Scatter(x=df_s["Quarter"], y=df_s[f"PSI_{stratum}_mean"],
+                                 name=f"{scenario} {stratum} PSI", line=dict(color=stratum_colors[stratum], dash=colors[scenario])),
+                      row=3, col=1)
+        fig.add_trace(go.Scatter(x=df_s["Quarter"], y=df_s[f"PSI_{stratum}_10th"], fill=None, mode='lines',
+                                 line=dict(color=stratum_colors[stratum], dash=colors[scenario]), showlegend=False),
+                      row=3, col=1)
+        fig.add_trace(go.Scatter(x=df_s["Quarter"], y=df_s[f"PSI_{stratum}_90th"], fill='tonexty', mode='lines',
+                                 line=dict(color=stratum_colors[stratum], dash=colors[scenario]), showlegend=False, opacity=0.2),
+                      row=3, col=1)
+
+# PSI Contribution (Stacked Bar, High_Impact, Q6)
+df_high_q6 = df_strata[(df_strata["Scenario"] == "High_Impact") & (df_strata["Quarter"] == 6)]
+for stratum in strata:
+    weights = strata[stratum]
+    usd_contrib = df_high_q6["USD_Decline"] * weights["USD_weight"]
+    poverty_contrib = df_high_q6["Poverty_Increase"] * weights["Poverty_weight"]
+    crime_contrib = df_high_q6["Crime_Increase"] * weights["Crime_weight"]
+    retreat_contrib = df_high_q6["Retreat_Probability"] * weights["Retreat_weight"]
+    fig.add_trace(go.Bar(x=[stratum], y=usd_contrib.mean(), name=f"{stratum} USD", marker_color="purple"), row=1, col=2)
+    fig.add_trace(go.Bar(x=[stratum], y=poverty_contrib.mean(), name=f"{stratum} Poverty", marker_color="red"), row=1, col=2)
+    fig.add_trace(go.Bar(x=[stratum], y=crime_contrib.mean(), name=f"{stratum} Crime", marker_color="orange"), row=1, col=2)
+    fig.add_trace(go.Bar(x=[stratum], y=retreat_contrib.mean(), name=f"{stratum} Retreat", marker_color="cyan"), row=1, col=2)
+
+fig.update_layout(barmode='stack', row=1, col=2)
+
+# Heatmaps for PSI by Stratum (Q4, Q6)
+for q in [4, 6]:
+    heatmap_data = df_strata[df_strata["Quarter"] == q].groupby([pd.cut(df_strata[df_strata["Quarter"] == q]["RCF"], bins=20)]).agg({
+        **{f"PSI_{stratum}": "mean" for stratum in strata}
+    }).reset_index()
+    heatmap_data["RCF_bin"] = heatmap_data["RCF"].apply(lambda x: x.mid)
+    heatmap_pivot = heatmap_data[[f"PSI_{stratum}" for stratum in strata]].rename(columns={f"PSI_{stratum}": stratum for stratum in strata})
+    fig.add_trace(go.Heatmap(z=heatmap_pivot.values.T, x=heatmap_data["RCF_bin"], y=list(strata.keys()),
+                             colorscale="Viridis", showscale=True), row=3, col=1 if q == 4 else 2)
+
+# Intervention alerts (from prior simulation)
+alerts = []
+for scenario in df_strata["Scenario"].unique():
+    df_scenario = population_summary[population_summary["Scenario"] == scenario]
+    for q in range(3, 6):  # Q4-Q6
+        sc_mean = df_strata[(df_strata["Scenario"] == scenario) & (df_strata["Quarter"] == q + 1)]["SC"].mean()
+        retreat_prob = df_strata[(df_strata["Scenario"] == scenario) & (df_strata["Quarter"] == q + 1)]["Retreat_Probability"].mean()
+        for stratum in strata:
+            psi_mean = df_scenario[df_scenario["Quarter"] == q + 1][f"PSI_{stratum}_mean"].iloc[0]
+            if sc_mean >= 0.7 or retreat_prob >= 50:
+                alerts.append({
+                    "Scenario": scenario,
+                    "Quarter": q + 1,
+                    "Stratum": stratum,
+                    "Alert": f"Primary: SC={sc_mean:.2f}, Retreat_Prob={retreat_prob:.1f}%, PSI_{stratum}={psi_mean:.1f}"
+                })
+            if psi_mean > 30:  # Threshold for high population stress
+                alerts.append({
+                    "Scenario": scenario,
+                    "Quarter": q + 1,
+                    "Stratum": stratum,
+                    "Alert": f"Secondary: PSI_{stratum}={psi_mean:.1f}"
+                })
+
+fig.add_trace(go.Table(
+    header=dict(values=["Scenario", "Quarter", "Stratum", "Alert"], font=dict(size=12), align="center"),
+    cells=dict(values=[pd.DataFrame(alerts)["Scenario"], pd.DataFrame(alerts)["Quarter"],
+                       pd.DataFrame(alerts)["Stratum"], pd.DataFrame(alerts)["Alert"]], align="left")
+), row=4, col=1)
+
+# Probabilistic outcomes (from prior simulation)
+prob_table = df_strata.groupby("Scenario").agg({
+    "Elite_Loss_Billion": ["mean", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)],
+    "Retreat_Probability": ["mean", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)],
+    "USD_Decline": ["mean", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)],
+    **{f"PSI_{stratum}": ["mean"] for stratum in strata}
+}).reset_index()
+prob_table.columns = ["Scenario", "Elite_Loss_Mean", "Elite_Loss_10th", "Elite_Loss_90th",
+                      "Retreat_Prob_Mean", "Retreat_Prob_10th", "Retreat_Prob_90th",
+                      "USD_Decline_Mean", "USD_Decline_10th", "USD_Decline_90th"] + [f"PSI_{stratum}_Mean" for stratum in strata]
+fig.add_trace(go.Table(
+    header=dict(values=["Scenario", "Elite Loss ($B)", "Retreat Prob (%)", "USD Decline (%)"] + [f"PSI_{s} (%)" for s in strata],
+                font=dict(size=12), align="center"),
+    cells=dict(values=[
+        prob_table["Scenario"],
+        prob_table["Elite_Loss_Mean"].round(1).astype(str) + " (" + prob_table["Elite_Loss_10th"].round(1).astype(str) + "-" + prob_table["Elite_Loss_90th"].round(1).astype(str) + ")",
+        prob_table["Retreat_Prob_Mean"].round(1).astype(str) + " (" + prob_table["Retreat_Prob_10th"].round(1).astype(str) + "-" + prob_table["Retreat_Prob_90th"].round(1).astype(str) + ")",
+        prob_table["USD_Decline_Mean"].round(1).astype(str) + " (" + prob_table["USD_Decline_10th"].round(1).astype(str) + "-" + prob_table["USD_Decline_90th"].round(1).astype(str) + ")",
+        *[prob_table[f"PSI_{stratum}_Mean"].round(1) for stratum in strata]
+    ], align="left")
+), row=4, col=2)
+
+fig.update_layout(title_text="Population & Family Impact Map (Q1-Q12, 2025-2030)", height=1200, showlegend=True)
+fig.write_html("population_family_impact_map.html")
+
+# Save results
+df_strata.to_csv("usd_collapse_strata.csv", index=False)
+population_summary.to_csv("population_summary.csv", index=False)
+pd.DataFrame(alerts).to_csv("strata_alerts.csv", index=False)
+
+# Print results
+print("\nProbabilistic Outcomes (5-Year Average):")
+print(prob_table)
+print("\nIntervention Alerts (Q4-Q6):")
+print(pd.DataFrame(alerts))
+print(f"\nExecution Time: {time.time() - start_time:.2f} seconds")
