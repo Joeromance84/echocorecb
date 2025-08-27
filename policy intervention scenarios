@@ -1,0 +1,304 @@
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import time
+
+# Start timing
+start_time = time.time()
+
+# Assume df_strata from prior simulation (Scenario, Quarter, EP, PSI_{stratum}, FEI_{stratum}, SS_{stratum}, etc.)
+# Define intervention scenarios
+intervention_scenarios = {
+    "Baseline": {"FEI_reduction": 0.0, "SS_reduction": 0.0, "RCF_boost": 0.0, "PSI_reduction": 0.0},
+    "Moderate": {"FEI_reduction": 0.1, "SS_reduction": 0.1, "RCF_boost": 0.1, "PSI_reduction": 0.05},
+    "Aggressive": {"FEI_reduction": 0.15, "SS_reduction": 0.15, "RCF_boost": 0.2, "PSI_reduction": 0.15}
+}
+
+# Define strata with intersectional additions
+strata = {
+    "Working_Class": {"USD_weight": 0.4, "Poverty_weight": 0.4, "Crime_weight": 0.15, "Retreat_weight": 0.05, "FEI_USD_mult": 0.5, "FEI_Poverty_mult": 1.0, "SS_Crime_mult": 0.5},
+    "Low_Income": {"USD_weight": 0.5, "Poverty_weight": 0.5, "Crime_weight": 0.1, "Retreat_weight": 0.05, "FEI_USD_mult": 0.6, "FEI_Poverty_mult": 1.2, "SS_Crime_mult": 0.4},
+    "Urban": {"USD_weight": 0.3, "Poverty_weight": 0.3, "Crime_weight": 0.3, "Retreat_weight": 0.1, "FEI_USD_mult": 0.4, "FEI_Poverty_mult": 0.8, "SS_Crime_mult": 0.7},
+    "Rural": {"USD_weight": 0.5, "Poverty_weight": 0.4, "Crime_weight": 0.1, "Retreat_weight": 0.05, "FEI_USD_mult": 0.6, "FEI_Poverty_mult": 1.0, "SS_Crime_mult": 0.3},
+    "Black": {"USD_weight": 0.55, "Poverty_weight": 0.55, "Crime_weight": 0.15, "Retreat_weight": 0.05, "FEI_USD_mult": 0.65, "FEI_Poverty_mult": 1.3, "SS_Crime_mult": 0.6},
+    "Brown": {"USD_weight": 0.5, "Poverty_weight": 0.5, "Crime_weight": 0.15, "Retreat_weight": 0.05, "FEI_USD_mult": 0.6, "FEI_Poverty_mult": 1.25, "SS_Crime_mult": 0.55},
+    "Children": {"USD_weight": 0.5, "Poverty_weight": 0.6, "Crime_weight": 0.05, "Retreat_weight": 0.03, "FEI_USD_mult": 0.6, "FEI_Poverty_mult": 1.4, "SS_Crime_mult": 0.3},
+    "Elderly": {"USD_weight": 0.5, "Poverty_weight": 0.55, "Crime_weight": 0.1, "Retreat_weight": 0.03, "FEI_USD_mult": 0.65, "FEI_Poverty_mult": 1.3, "SS_Crime_mult": 0.4},
+    "Women": {"USD_weight": 0.45, "Poverty_weight": 0.45, "Crime_weight": 0.2, "Retreat_weight": 0.05, "FEI_USD_mult": 0.55, "FEI_Poverty_mult": 1.1, "SS_Crime_mult": 0.6},
+    "LI_Black_Children": {"USD_weight": 0.6, "Poverty_weight": 0.65, "Crime_weight": 0.1, "Retreat_weight": 0.03, "FEI_USD_mult": 0.7, "FEI_Poverty_mult": 1.5, "SS_Crime_mult": 0.5},
+    "UR_Black_Women": {"USD_weight": 0.55, "Poverty_weight": 0.5, "Crime_weight": 0.35, "Retreat_weight": 0.1, "FEI_USD_mult": 0.6, "FEI_Poverty_mult": 1.2, "SS_Crime_mult": 0.8}
+}
+
+# Simulate intervention scenarios
+df_interventions = []
+for int_scenario, params in intervention_scenarios.items():
+    df_temp = df_strata.copy()
+    df_temp["Intervention"] = int_scenario
+    for stratum in strata:
+        df_temp[f"FEI_{stratum}"] *= (1 - params["FEI_reduction"] * (stratum in ["Low_Income", "Black", "Brown", "Children", "Elderly", "LI_Black_Children"]))
+        df_temp[f"SS_{stratum}"] *= (1 - params["SS_reduction"] * (stratum in ["Urban", "Black", "Brown", "Women", "UR_Black_Women"]))
+        df_temp[f"PSI_{stratum}"] *= (1 - params["PSI_reduction"] * (stratum in ["Black", "Brown", "LI_Black_Children"]))
+    df_temp["RCF"] += params["RCF_boost"]
+    df_temp["Retreat_Probability"] += params["RCF_boost"] * 20
+    df_temp["Retreat_Probability"] = np.clip(df_temp["Retreat_Probability"], 0, 100)
+    # Feedback loop: Conflict-driven collapse (SS > 50) spikes PSI
+    for q in range(1, 12):
+        mask = (df_temp["Quarter"] == q) & (df_temp[[f"SS_{s}" for s in ["Urban", "Black", "Brown", "Women", "UR_Black_Women"]]].mean(axis=1) > 50)
+        df_temp.loc[df_temp["Quarter"] == q + 1, [f"PSI_{s}" for s in strata]] *= np.where(mask, 1.1, 1.0)
+    df_interventions.append(df_temp)
+df_interventions = pd.concat(df_interventions)
+
+# Compute ECI, CL, IE
+df_interventions["CL"] = 1.0 - 0.5 * df_interventions[[f"PSI_{s}" for s in ["Low_Income", "Black", "Brown", "Children", "Elderly", "LI_Black_Children"]]].mean(axis=1)
+df_interventions["IE"] = 1.0 - 0.4 * df_interventions[[f"SS_{s}" for s in ["Urban", "Black", "Brown", "Women", "UR_Black_Women"]]].mean(axis=1) - 0.3 * df_interventions["Retreat_Probability"] / 100
+df_interventions["ECI"] = 0.5 * df_interventions["EP"] + 0.3 * df_interventions["CL"] + 0.2 * df_interventions["IE"]
+
+# Aggregate per Scenario, Quarter, Intervention
+eci_summary = df_interventions.groupby(["Scenario", "Quarter", "Intervention"]).agg({
+    "ECI": ["mean", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)],
+    "CL": ["mean"], "IE": ["mean"],
+    **{f"PSI_{s}": ["mean"] for s in ["Low_Income", "Black", "Brown", "Children", "Elderly", "LI_Black_Children"]},
+    **{f"SS_{s}": ["mean"] for s in ["Urban", "Black", "Brown", "Women", "UR_Black_Women"]}
+}).reset_index()
+eci_summary.columns = ["Scenario", "Quarter", "Intervention",
+                      "ECI_mean", "ECI_10th", "ECI_90th", "CL_mean", "IE_mean"] + \
+                     [f"PSI_{s}_mean" for s in ["Low_Income", "Black", "Brown", "Children", "Elderly", "LI_Black_Children"]] + \
+                     [f"SS_{s}_mean" for s in ["Urban", "Black", "Brown", "Women", "UR_Black_Women"]]
+
+# Tipping points and policy suggestions
+tipping_points = []
+policy_suggestions = []
+for scenario in df_interventions["Scenario"].unique():
+    for int_scenario in intervention_scenarios:
+        df_subset = eci_summary[(eci_summary["Scenario"] == scenario) & (eci_summary["Intervention"] == int_scenario)]
+        for q in range(1, 13):
+            eci_mean = df_subset[df_subset["Quarter"] == q]["ECI_mean"].iloc[0]
+            psi_mean = df_subset[df_subset["Quarter"] == q][[f"PSI_{s}_mean" for s in ["Low_Income", "Black", "Brown", "Children", "Elderly", "LI_Black_Children"]]].mean().mean()
+            ss_mean = df_subset[df_subset["Quarter"] == q][[f"SS_{s}_mean" for s in ["Urban", "Black", "Brown", "Women", "UR_Black_Women"]]].mean().mean()
+            outcome = ""
+            historical = ""
+            suggestions = []
+            if eci_mean < 0.3 and psi_mean > 30 and ss_mean < 30:
+                outcome = "Voluntary Abdication"
+                historical = "Similar to South Africa (1994) negotiated transitions."
+                suggestions.append("Sustain RCF > 0.8 to maintain pressure.")
+                suggestions.append("Expand subsidies for LI/Black/Brown/Children to stabilize PSI.")
+            elif eci_mean < 0.5 and psi_mean > 40 and ss_mean > 50:
+                outcome = "Conflict-Driven Collapse"
+                historical = "Parallels Argentina (2001) with social unrest."
+                suggestions.append("Urgent policing in UR/Black/Brown/Women to reduce SS.")
+                suggestions.append("Diaspora-led relief for Black/Brown to cut PSI by 15%.")
+            if outcome:
+                tipping_points.append({
+                    "Scenario": scenario,
+                    "Intervention": int_scenario,
+                    "Quarter": q,
+                    "Outcome": outcome,
+                    "ECI": f"{eci_mean:.2f}",
+                    "PSI": f"{psi_mean:.1f}",
+                    "SS": f"{ss_mean:.1f}",
+                    "Historical": historical
+                })
+            if psi_mean > 30 or ss_mean > 30:
+                suggestions.append(f"Q{q}, {int_scenario}: Subsidies for LI/Black/Brown/Children to reduce PSI by 10-15%." if psi_mean > 30 else "")
+                suggestions.append(f"Q{q}, {int_scenario}: Policing in UR/Black/Brown/Women to reduce SS by 10%." if ss_mean > 30 else "")
+                suggestions.append(f"Q{q}, {int_scenario}: Increase RCF to {df_interventions['RCF'].mean():.2f}+0.2 for Black/Brown relief.")
+                policy_suggestions.append({
+                    "Scenario": scenario,
+                    "Intervention": int_scenario,
+                    "Quarter": q,
+                    "Suggestions": "; ".join([s for s in suggestions if s])
+                })
+
+# Narrative summaries
+narratives = []
+for scenario in df_interventions["Scenario"].unique():
+    for int_scenario in intervention_scenarios:
+        df_subset = eci_summary[(eci_summary["Scenario"] == scenario) & (eci_summary["Intervention"] == int_scenario)]
+        for q in range(1, 13):
+            eci_mean = df_subset[df_subset["Quarter"] == q]["ECI_mean"].iloc[0]
+            cl_mean = df_subset[df_subset["Quarter"] == q]["CL_mean"].iloc[0]
+            ie_mean = df_subset[df_subset["Quarter"] == q]["IE_mean"].iloc[0]
+            psi_mean = df_subset[df_subset["Quarter"] == q][[f"PSI_{s}_mean" for s in ["Low_Income", "Black", "Brown", "Children", "Elderly", "LI_Black_Children"]]].mean().mean()
+            severity = "critical" if eci_mean < 0.3 else "high" if eci_mean < 0.5 else "moderate"
+            narrative = f"Q{q}, {scenario} ({int_scenario}): {severity.capitalize()} elite control erosion (ECI={eci_mean:.2f}). "
+            if eci_mean < 0.3:
+                narrative += f"Severe loss of legitimacy (CL={cl_mean:.2f}) and enforcement (IE={ie_mean:.2f}) due to {psi_mean:.1f}% PSI."
+            elif eci_mean < 0.5:
+                narrative += f"High pressure from {psi_mean:.1f}% PSI, weakening CL={cl_mean:.2f}, IE={ie_mean:.2f}."
+            else:
+                narrative += f"Moderate decline, PSI at {psi_mean:.1f}%."
+            narratives.append({"Scenario": scenario, "Intervention": int_scenario, "Quarter": q, "Narrative": narrative})
+
+# --- Interactive Dashboard ---
+fig = make_subplots(
+    rows=5, cols=2,
+    subplot_titles=(
+        "Elite Control Index (ECI) by Intervention",
+        "PSI by Vulnerable Strata",
+        "Social Strain (SS) by Strata",
+        "ECI vs PSI/SS (Q4)",
+        "ECI vs PSI/SS (Q6)",
+        "Tipping Points",
+        "Policy Suggestions",
+        "Narrative Summaries",
+        "Systemic Metrics",
+        "Probabilistic Outcomes"
+    ),
+    specs=[
+        [{"type": "xy"}, {"type": "xy"}],
+        [{"type": "xy"}, {"type": "heatmap"}],
+        [{"type": "heatmap"}, {"type": "table"}],
+        [{"type": "table"}, {"type": "table"}],
+        [{"type": "xy"}, {"type": "table"}]
+    ],
+    vertical_spacing=0.08
+)
+
+colors = {"Baseline": "solid", "Moderate": "dash", "Aggressive": "dot"}
+int_colors = {"Baseline": "purple", "Moderate": "blue", "Aggressive": "green"}
+
+# Line plots with intervention overlays
+buttons = []
+for scenario in df_interventions["Scenario"].unique():
+    traces = []
+    for int_scenario in intervention_scenarios:
+        df_s = eci_summary[(eci_summary["Scenario"] == scenario) & (eci_summary["Intervention"] == int_scenario)]
+        # ECI
+        traces.append(go.Scatter(x=df_s["Quarter"], y=df_s["ECI_mean"], name=f"{int_scenario} ECI",
+                                 line=dict(color=int_colors[int_scenario], dash=colors[int_scenario]), visible=(scenario == "High_Impact")))
+        traces.append(go.Scatter(x=df_s["Quarter"], y=df_s["ECI_10th"], fill=None, mode='lines',
+                                 line=dict(color=int_colors[int_scenario], dash=colors[int_scenario]), showlegend=False, visible=(scenario == "High_Impact")))
+        traces.append(go.Scatter(x=df_s["Quarter"], y=df_s["ECI_90th"], fill='tonexty', mode='lines',
+                                 line=dict(color=int_colors[int_scenario], dash=colors[int_scenario]), showlegend=False, opacity=0.2, visible=(scenario == "High_Impact")))
+        # PSI (vulnerable strata)
+        for stratum in ["Low_Income", "Black", "Brown", "Children", "Elderly", "LI_Black_Children"]:
+            traces.append(go.Scatter(x=df_s["Quarter"], y=df_s[f"PSI_{stratum}_mean"], name=f"{int_scenario} PSI_{stratum}",
+                                     line=dict(color=int_colors[int_scenario], dash=colors[int_scenario]), visible=(scenario == "High_Impact")))
+        # SS
+        for stratum in ["Urban", "Black", "Brown", "Women", "UR_Black_Women"]:
+            traces.append(go.Scatter(x=df_s["Quarter"], y=df_s[f"SS_{stratum}_mean"], name=f"{int_scenario} SS_{stratum}",
+                                     line=dict(color=int_colors[int_scenario], dash=colors[int_scenario]), visible=(scenario == "High_Impact")))
+    for trace in traces:
+        fig.add_trace(trace, row=1 if "ECI" in trace.name else 2 if "PSI" in trace.name else 3, col=1)
+
+    # Heatmaps (Q4, Q6)
+    for q in [4, 6]:
+        heatmap_data = df_interventions[(df_interventions["Scenario"] == scenario) & (df_interventions["Quarter"] == q)].groupby([
+            pd.cut(df_interventions[(df_interventions["Scenario"] == scenario) & (df_interventions["Quarter"] == q)][[f"PSI_{s}" for s in ["Low_Income", "Black", "Brown", "Children", "Elderly", "LI_Black_Children"]]].mean(axis=1), bins=20),
+            pd.cut(df_interventions[(df_interventions["Scenario"] == scenario) & (df_interventions["Quarter"] == q)][[f"SS_{s}" for s in ["Urban", "Black", "Brown", "Women", "UR_Black_Women"]]].mean(axis=1), bins=20)
+        ]).agg({"ECI": "mean"}).reset_index()
+        heatmap_data["PSI_bin"] = heatmap_data.iloc[:, 0].apply(lambda x: x.mid)
+        heatmap_data["SS_bin"] = heatmap_data.iloc[:, 1].apply(lambda x: x.mid)
+        heatmap_pivot = heatmap_data.pivot_table(index="PSI_bin", columns="SS_bin", values="ECI")
+        fig.add_trace(go.Heatmap(z=heatmap_pivot.values, x=heatmap_pivot.columns, y=heatmap_pivot.index,
+                                 colorscale="Viridis", showscale=True, visible=(scenario == "High_Impact")),
+                      row=4 if q == 4 else 5, col=2)
+
+    buttons.append(dict(
+        label=scenario,
+        method="update",
+        args=[{"visible": [s == scenario for s in df_interventions["Scenario"].unique() for _ in range(3 + len(["Low_Income", "Black", "Brown", "Children", "Elderly", "LI_Black_Children"]) + len(["Urban", "Black", "Brown", "Women", "UR_Black_Women"]) + 2)] + [True] * 4},
+              {"title": f"Policy Intervention Scenarios ({scenario}, Q1-Q12, 2025-2030)"}]
+    ))
+
+# Tipping points table
+fig.add_trace(go.Table(
+    header=dict(values=["Scenario", "Intervention", "Quarter", "Outcome", "ECI", "PSI", "SS", "Historical"], font=dict(size=12), align="center"),
+    cells=dict(values=[pd.DataFrame(tipping_points)["Scenario"], pd.DataFrame(tipping_points)["Intervention"],
+                       pd.DataFrame(tipping_points)["Quarter"], pd.DataFrame(tipping_points)["Outcome"],
+                       pd.DataFrame(tipping_points)["ECI"], pd.DataFrame(tipping_points)["PSI"],
+                       pd.DataFrame(tipping_points)["SS"], pd.DataFrame(tipping_points)["Historical"]], align="left"),
+    visible=True
+), row=3, col=2)
+
+# Policy suggestions table
+fig.add_trace(go.Table(
+    header=dict(values=["Scenario", "Intervention", "Quarter", "Suggestions"], font=dict(size=12), align="center"),
+    cells=dict(values=[pd.DataFrame(policy_suggestions)["Scenario"], pd.DataFrame(policy_suggestions)["Intervention"],
+                       pd.DataFrame(policy_suggestions)["Quarter"], pd.DataFrame(policy_suggestions)["Suggestions"]], align="left"),
+    visible=True
+), row=4, col=1)
+
+# Narrative summaries
+fig.add_trace(go.Table(
+    header=dict(values=["Scenario", "Intervention", "Quarter", "Narrative"], font=dict(size=12), align="center"),
+    cells=dict(values=[pd.DataFrame(narratives)["Scenario"], pd.DataFrame(narratives)["Intervention"],
+                       pd.DataFrame(narratives)["Quarter"], pd.DataFrame(narratives)["Narrative"]], align="left"),
+    visible=True
+), row=4, col=2)
+
+# Systemic metrics (EP, GM, SC)
+systemic_summary = df_interventions.groupby(["Scenario", "Quarter", "Intervention"]).agg({
+    "EP": ["mean"], "GM": ["mean"], "SC": ["mean"]
+}).reset_index()
+systemic_summary.columns = ["Scenario", "Quarter", "Intervention", "EP_mean", "GM_mean", "SC_mean"]
+for scenario in df_interventions["Scenario"].unique():
+    for int_scenario in intervention_scenarios:
+        df_s = systemic_summary[(systemic_summary["Scenario"] == scenario) & (systemic_summary["Intervention"] == int_scenario)]
+        fig.add_trace(go.Scatter(x=df_s["Quarter"], y=df_s["EP_mean"], name=f"{int_scenario} EP",
+                                 line=dict(color="red", dash=colors[int_scenario]), visible=(scenario == "High_Impact")), row=5, col=1)
+        fig.add_trace(go.Scatter(x=df_s["Quarter"], y=df_s["GM_mean"], name=f"{int_scenario} GM",
+                                 line=dict(color="blue", dash=colors[int_scenario]), visible=(scenario == "High_Impact")), row=5, col=1)
+        fig.add_trace(go.Scatter(x=df_s["Quarter"], y=df_s["SC_mean"], name=f"{int_scenario} SC",
+                                 line=dict(color="green", dash=colors[int_scenario]), visible=(scenario == "High_Impact")), row=5, col=1)
+    buttons[[s for s, b in enumerate(buttons) if b["label"] == scenario][0]]["args"][0]["visible"].extend([scenario == "High_Impact"] * 3 * len(intervention_scenarios))
+
+# Probabilistic outcomes
+prob_table = df_interventions.groupby(["Scenario", "Intervention"]).agg({
+    "ECI": ["mean", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)],
+    "CL": ["mean"], "IE": ["mean"],
+    "Retreat_Probability": ["mean"],
+    "USD_Decline": ["mean"]
+}).reset_index()
+prob_table.columns = ["Scenario", "Intervention", "ECI_Mean", "ECI_10th", "ECI_90th", "CL_Mean", "IE_Mean", "Retreat_Prob_Mean", "USD_Decline_Mean"]
+fig.add_trace(go.Table(
+    header=dict(values=["Scenario", "Intervention", "ECI", "CL", "IE", "Retreat Prob (%)", "USD Decline (%)"], font=dict(size=12), align="center"),
+    cells=dict(values=[
+        prob_table["Scenario"], prob_table["Intervention"],
+        prob_table["ECI_Mean"].round(2).astype(str) + " (" + prob_table["ECI_10th"].round(2).astype(str) + "-" + prob_table["ECI_90th"].round(2).astype(str) + ")",
+        prob_table["CL_Mean"].round(2),
+        prob_table["IE_Mean"].round(2),
+        prob_table["Retreat_Prob_Mean"].round(1),
+        prob_table["USD_Decline_Mean"].round(1)
+    ], align="left"),
+    visible=True
+), row=5, col=2)
+
+# Add dropdowns
+fig.update_layout(
+    title_text="Policy Intervention Scenarios (High_Impact, Q1-Q12, 2025-2030)",
+    height=1500,
+    showlegend=True,
+    updatemenus=[dict(
+        buttons=buttons,
+        direction="down",
+        showactive=True,
+        x=0.1,
+        xanchor="left",
+        y=1.1,
+        yanchor="top"
+    )]
+)
+
+# Save and show
+fig.write_html("policy_intervention_scenarios.html")
+
+# Save results
+df_interventions.to_csv("policy_intervention_data.csv", index=False)
+eci_summary.to_csv("eci_intervention_summary.csv", index=False)
+pd.DataFrame(tipping_points).to_csv("tipping_points_interventions.csv", index=False)
+pd.DataFrame(policy_suggestions).to_csv("policy_suggestions.csv", index=False)
+pd.DataFrame(narratives).to_csv("intervention_narratives.csv", index=False)
+
+# Print results
+print("\nProbabilistic Outcomes (5-Year Average):")
+print(prob_table)
+print("\nTipping Points:")
+print(pd.DataFrame(tipping_points))
+print("\nPolicy Suggestions (Sample):")
+print(pd.DataFrame(policy_suggestions).head(10))
+print("\nNarrative Summaries (Sample):")
+print(pd.DataFrame(narratives).head(10))
+print(f"\nExecution Time: {time.time() - start_time:.2f} seconds")
