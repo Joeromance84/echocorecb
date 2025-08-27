@@ -1,0 +1,409 @@
+import dash
+from dash import dcc, html, Input, Output, State
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import pandas as pd
+from datetime import datetime
+import json
+
+# --- Sample data ---
+# [Assume eci_summary, tipping_points, policy_suggestions, narratives defined as in prior responses]
+# For brevity, here's a minimal placeholder; replace with full data from previous responses
+np.random.seed(42)
+quarters = list(range(1, 13))
+scenarios = ["High_Impact"]
+interventions = ["Baseline", "Moderate", "Aggressive"]
+strata = ["Low_Income", "Black", "Children", "LI_Black_Children", "Urban", "Women", "UR_Black_Women"]
+data = []
+for s in scenarios:
+    for i in interventions:
+        for q in quarters:
+            eci = 0.5 - 0.03 * q * (1 if s == "High_Impact" else 0.5) * (1 if i == "Baseline" else 0.8 if i == "Moderate" else 0.6)
+            data.append({
+                "Scenario": s, "Intervention": i, "Quarter": q,
+                "ECI_mean": eci, "ECI_10th": eci * 0.9, "ECI_90th": eci * 1.1,
+                **{f"PSI_{st}_mean": 40 + 10 * q * (1.2 if st == "LI_Black_Children" else 1) * (1 if i == "Baseline" else 0.9) + np.random.uniform(-5, 5) for st in strata[:4]},
+                **{f"PSI_{st}_10th": 35 + 10 * q * (1.2 if st == "LI_Black_Children" else 1) * 0.9 for st in strata[:4]},
+                **{f"PSI_{st}_90th": 45 + 10 * q * (1.2 if st == "LI_Black_Children" else 1) * 1.1 for st in strata[:4]},
+                **{f"SS_{st}_mean": 30 + 8 * q * (1.1 if st == "UR_Black_Women" else 1) * (1 if i == "Baseline" else 0.8) + np.random.uniform(-3, 3) for st in strata[4:]},
+                **{f"SS_{st}_10th": 25 + 8 * q * (1.1 if st == "UR_Black_Women" else 1) * 0.9 for st in strata[4:]},
+                **{f"SS_{st}_90th": 35 + 8 * q * (1.1 if st == "UR_Black_Women" else 1) * 1.1 for st in strata[4:]}
+            })
+eci_summary = pd.DataFrame(data)
+tipping_points = [
+    {"Scenario": "High_Impact", "Intervention": "Baseline", "Quarter": 8, "Outcome": "Conflict-Driven Collapse", "ECI": "0.20", "PSI": "55.0", "SS": "50.0", "Historical": "Argentina 2001"},
+    {"Scenario": "High_Impact", "Intervention": "Aggressive", "Quarter": 5, "Outcome": "Voluntary Abdication", "ECI": "0.35", "PSI": "45.0", "SS": "35.0", "Historical": "South Africa 1994"}
+]
+policy_suggestions = [
+    {"Scenario": "High_Impact", "Intervention": "Aggressive", "Quarter": 5, "Suggestions": "Subsidies for LI_Black_Children to cut PSI by 15%; Increase RCF to 0.8"}
+]
+narratives = [
+    {"Scenario": "High_Impact", "Intervention": "Baseline", "Quarter": 8, "Narrative": "Critical ECI erosion (0.20) due to 55% PSI."}
+]
+
+# Initialize Dash app
+app = dash.Dash(__name__, title="My Community Impact")
+
+# Colors and styles
+colors = {"Baseline": "#9467bd", "Moderate": "#1f77b4", "Aggressive": "#2ca02c"}
+dashes = {"Baseline": "solid", "Moderate": "dash", "Aggressive": "dot"}
+key_psi_strata = ["Low_Income", "Black", "Children", "LI_Black_Children"]
+key_ss_strata = ["Urban", "Black", "Women", "UR_Black_Women"]
+
+# Multilingual translations
+translations = {
+    "EN": {
+        "title": "My Community Impact",
+        "food_risk": "Food Insecurity Risk",
+        "psi": "Community Stress",
+        "ss": "Social Tension",
+        "how_works": "How This Works",
+        "narrative": "In Q{quarter} 2025, your community faces {risk}% food insecurity risk due to rising costs. Subsidies could reduce stress by 15%.",
+        "psi_tooltip": "Measures economic and social pressure in your community",
+        "ss_tooltip": "Measures potential for social tension",
+        "eci_tooltip": "Measures elite control over resources",
+        "about_data": "About Our Data",
+        "feedback_confirm": "Thank you for your feedback!",
+        "strata_help": "Choose your community to see specific risks like food insecurity",
+        "simulator_disclaimer": "Simplified model, real-world results may vary",
+        "resources_tips": "Resources & Tips",
+        "community_updates": "Community Updates",
+        "feedback_prompt": "Does this match your experience?"
+    },
+    "ES": {
+        "title": "Impacto en Mi Comunidad",
+        "food_risk": "Riesgo de Inseguridad Alimentaria",
+        "psi": "Estrés Comunitario",
+        "ss": "Tensión Social",
+        "how_works": "Cómo Funciona",
+        "narrative": "En el Q{quarter} 2025, su comunidad enfrenta un riesgo de inseguridad alimentaria del {risk}%. Los subsidios podrían reducir el estrés en un 15%.",
+        "psi_tooltip": "Mide la presión económica y social en su comunidad",
+        "ss_tooltip": "Mide el potencial de tensión social",
+        "eci_tooltip": "Mide el control de élites sobre los recursos",
+        "about_data": "Acerca de Nuestros Datos",
+        "feedback_confirm": "¡Gracias por sus comentarios!",
+        "strata_help": "Elija su comunidad para ver riesgos específicos como la inseguridad alimentaria",
+        "simulator_disclaimer": "Modelo simplificado, los resultados reales pueden variar",
+        "resources_tips": "Recursos y Consejos",
+        "community_updates": "Actualizaciones de la Comunidad",
+        "feedback_prompt": "¿Coincide esto con su experiencia?"
+    },
+    "FR": {
+        "title": "Impact sur Ma Communauté",
+        "food_risk": "Risque d'Insécurité Alimentaire",
+        "psi": "Stress Communautaire",
+        "ss": "Tension Sociale",
+        "how_works": "Comment Ça Marche",
+        "narrative": "Au Q{quarter} 2025, votre communauté risque {risk}% d'insécurité alimentaire en raison de la hausse des coûts. Les subventions pourraient réduire le stress de 15%.",
+        "psi_tooltip": "Mesure la pression économique et sociale dans votre communauté",
+        "ss_tooltip": "Mesure le potentiel de tension sociale",
+        "eci_tooltip": "Mesure le contrôle des élites sur les ressources",
+        "about_data": "À Propos de Nos Données",
+        "feedback_confirm": "Merci pour votre retour !",
+        "strata_help": "Choisissez votre communauté pour voir les risques spécifiques comme l'insécurité alimentaire",
+        "simulator_disclaimer": "Modèle simplifié, les résultats réels peuvent varier",
+        "resources_tips": "Ressources et Conseils",
+        "community_updates": "Mises à Jour de la Communauté",
+        "feedback_prompt": "Cela correspond-il à votre expérience ?"
+    }
+}
+
+# Layout
+app.layout = html.Div([
+    # Header
+    html.Div([
+        html.H1(id="app-title", style={'color': '#1f77b4', 'font-family': 'Roboto', 'font-size': '20px'}),
+        html.Button("ℹ️", id="info-btn", title=translations["EN"]["how_works"], **{'aria-label': 'How this works'}),
+        dcc.Dropdown(['EN', 'ES', 'FR'], 'EN', id='lang-dropdown', style={'width': '100px'}, **{'aria-label': 'Select language'}),
+        html.A(id="about-data", href="https://github.com/community-impact/data", target="_blank", style={'color': '#1f77b4', 'margin': '10px'}),
+        dcc.ConfirmDialog(id='info-modal', message="", displayed=False)
+    ], style={'position': 'fixed', 'top': 0, 'width': '100%', 'background': 'white',
+              'box-shadow': '0 2px 4px rgba(0,0,0,0.1)', 'padding': '10px',
+              'display': 'flex', 'justify-content': 'space-between', 'z-index': 1000}),
+
+    # Community Selection
+    html.Div([
+        dcc.Dropdown(id='zip-dropdown', options=[{'label': z, 'value': z} for z in ['60601', '60602']],
+                     placeholder="Enter Zip Code", style={'width': '50%'}, **{'aria-label': 'Select zip code'}),
+        dcc.Checklist(id='strata-checklist', options=[{'label': s.replace('_', ' '), 'value': s}
+                                                     for s in key_psi_strata + key_ss_strata],
+                      value=['LI_Black_Children'], style={'margin-top': '10px'}, **{'aria-label': 'Select community groups'}),
+        html.Button("?", id="strata-help", style={'margin-left': '5px'}, **{'aria-label': 'Community selection help'}),
+        html.Button("Detailed Analysis", id="toggle-advanced", n_clicks=0, style={'margin-top': '10px'}, **{'aria-label': 'Toggle advanced features'}),
+        dcc.ConfirmDialog(id='strata-help-modal', message="", displayed=False)
+    ], style={'margin-top': '60px', 'background': '#f5f5f5', 'padding': '10px'}),
+
+    # Impact Summary
+    html.Div([
+        html.Div([
+            html.Img(src="https://cdn-icons-png.flaticon.com/512/1047/1047711.png", style={'width': '30px'}, alt="Food Insecurity Icon"),
+            html.P(id='food-risk', style={'color': 'red', 'font-size': '14px'}, **{'aria-live': 'polite'}),
+            html.Button("Expand", id="food-expand", n_clicks=0, style={'font-size': '12px'}, **{'aria-label': 'Expand food insecurity details'})
+        ], style={'border': '1px solid #ccc', 'border-radius': '5px', 'padding': '10px', 'width': '30%', 'text-align': 'center'}),
+        html.Div(id='food-expand-details', style={'display': 'none', 'font-size': '12px'}),
+        html.Div([
+            html.Img(src="https://cdn-icons-png.flaticon.com/512/3135/3135715.png", style={'width': '30px'}, alt="Community Stress Icon"),
+            html.P(id='psi-val', style={'color': 'orange', 'font-size': '14px'}, **{'aria-live': 'polite'}),
+            html.Button("?", id="psi-help", style={'margin-left': '5px'}, **{'aria-label': 'Community stress tooltip'}),
+            html.Button("Expand", id="psi-expand", n_clicks=0, style={'font-size': '12px'}, **{'aria-label': 'Expand community stress details'}),
+            dcc.ConfirmDialog(id='psi-help-modal', message="", displayed=False)
+        ], style={'border': '1px solid #ccc', 'border-radius': '5px', 'padding': '10px', 'width': '30%', 'text-align': 'center'}),
+        html.Div(id='psi-expand-details', style={'display': 'none', 'font-size': '12px'}),
+        html.Div([
+            html.Img(src="https://cdn-icons-png.flaticon.com/512/3079/3079168.png", style={'width': '30px'}, alt="Social Tension Icon"),
+            html.P(id='ss-val', style={'color': 'green', 'font-size': '14px'}, **{'aria-live': 'polite'}),
+            html.Button("?", id="ss-help", style={'margin-left': '5px'}, **{'aria-label': 'Social tension tooltip'}),
+            html.Button("Expand", id="ss-expand", n_clicks=0, style={'font-size': '12px'}, **{'aria-label': 'Expand social tension details'}),
+            dcc.ConfirmDialog(id='ss-help-modal', message="", displayed=False)
+        ], style={'border': '1px solid #ccc', 'border-radius': '5px', 'padding': '10px', 'width': '30%', 'text-align': 'center'}),
+        html.Div(id='ss-expand-details', style={'display': 'none', 'font-size': '12px'}),
+        html.P(id='narrative-text', style={'font-size': '14px', 'max-width': '90%', 'margin-top': '10px'}, **{'aria-live': 'polite'}),
+    ], style={'display': 'flex', 'flex-wrap': 'wrap', 'gap': '10px', 'padding': '10px', 'justify-content': 'center'}),
+
+    # Scenario & Intervention
+    html.Div([
+        dcc.RadioItems(id='intervention-radio', options=[{'label': i, 'value': i} for i in ['Baseline', 'Moderate', 'Aggressive']] + [{'label': 'All', 'value': 'All'}],
+                       value='All', style={'display': 'flex', 'gap': '10px'}, **{'aria-label': 'Select intervention'}),
+        html.Button("?", id="eci-help", style={'margin-left': '5px'}, **{'aria-label': 'ECI tooltip'}),
+        dcc.Graph(id='comparison-chart', config={'displayModeBar': False}),
+        dcc.ConfirmDialog(id='eci-help-modal', message="", displayed=False)
+    ], style={'padding': '10px'}),
+
+    # Timeline
+    html.Div([
+        dcc.Slider(id='quarter-slider', min=1, max=12, step=1, value=1,
+                   marks={i: f'Q{i}' for i in range(1, 13)}, **{'aria-label': 'Select quarter'}),
+        dcc.Graph(id='timeline-chart', config={'displayModeBar': False})
+    ], style={'padding': '10px'}),
+
+    # Multi-Strata Comparison
+    html.Div(id='multi-strata-container', children=[
+        dcc.Graph(id='multi-strata-chart', config={'displayModeBar': False})
+    ], style={'padding': '10px', 'display': 'none'}),
+
+    # Policy Simulator
+    html.Div(id='simulator-container', children=[
+        html.H3(id="simulator-title", style={'color': '#1f77b4', 'font-size': '16px'}),
+        html.Label("Subsidies (%)", style={'font-size': '14px'}),
+        dcc.Slider(id='subsidy-slider', min=0, max=20, step=1, value=10, **{'aria-label': 'Adjust subsidy percentage'}),
+        html.Label("RCF", style={'font-size': '14px'}),
+        dcc.Slider(id='rcf-slider', min=0, max=1, step=0.1, value=0.5, **{'aria-label': 'Adjust RCF level'}),
+        html.P(id="simulator-disclaimer", style={'font-size': '12px', 'color': '#666'}),
+        dcc.Graph(id='simulator-chart', config={'displayModeBar': False})
+    ], style={'padding': '10px', 'display': 'none'}),
+
+    # Resource Finder
+    html.Div([
+        html.H3(id="resources-title", style={'color': '#2ca02c', 'font-size': '16px'}),
+        html.Iframe(src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3153.019149606!2d-87.629798!3d41.878113!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x880e2cb7556b67b7%3A0x4c4c3f3e3f3e3f3e!2sChicago%2C%20IL%60601!5e0!3m2!1sen!2sus!4v1698765432100",
+                    style={'width': '100%', 'height': '200px'}, **{'aria-label': 'Local resource map'}),
+        html.A("Apply for subsidies at your local community center.", href="https://example.com/subsidies", id="subsidy-link", style={'font-size': '12px'})
+    ], style={'padding': '10px', 'background': '#e6e6fa'}),
+
+    # Community Feedback
+    html.Div([
+        html.H3(id="feedback-title", style={'font-size': '16px'}),
+        html.Button("Yes", id="feedback-yes", **{'aria-label': 'Feedback: Yes'}),
+        html.Button("No", id="feedback-no", **{'aria-label': 'Feedback: No'}),
+        dcc.Textarea(id="feedback-comment", placeholder="Add comments", style={'width': '100%', 'height': '50px'}, **{'aria-label': 'Enter feedback comments'}),
+        dcc.ConfirmDialog(id='feedback-modal', message="", displayed=False)
+    ], style={'padding': '10px'}),
+
+    # Community Board
+    html.Div([
+        html.H3(id="board-title", style={'font-size': '16px'}),
+        html.Div(id='community-board', style={'max-height': '200px', 'overflow-y': 'scroll'}, **{'aria-live': 'polite'})
+    ], style={'padding': '10px', 'background': '#e6e6fa'}),
+
+    dcc.Store(id='data-store', data=eci_summary.to_dict('records')),
+    dcc.Download(id="download-png")
+])
+
+# Callbacks
+@app.callback(
+    [Output('app-title', 'children'), Output('about-data', 'children'), Output('strata-help', 'title'),
+     Output('food-risk', 'children'), Output('psi-val', 'children'), Output('ss-val', 'children'),
+     Output('food-expand-details', 'children'), Output('food-expand-details', 'style'),
+     Output('psi-expand-details', 'children'), Output('psi-expand-details', 'style'),
+     Output('ss-expand-details', 'children'), Output('ss-expand-details', 'style'),
+     Output('narrative-text', 'children'), Output('simulator-title', 'children'),
+     Output('simulator-disclaimer', 'children'), Output('resources-title', 'children'),
+     Output('subsidy-link', 'children'), Output('feedback-title', 'children'),
+     Output('board-title', 'children'), Output('comparison-chart', 'figure'),
+     Output('timeline-chart', 'figure'), Output('multi-strata-chart', 'figure'),
+     Output('simulator-chart', 'figure'), Output('community-board', 'children'),
+     Output('info-modal', 'message'), Output('info-modal', 'displayed'),
+     Output('strata-help-modal', 'message'), Output('strata-help-modal', 'displayed'),
+     Output('psi-help-modal', 'message'), Output('psi-help-modal', 'displayed'),
+     Output('ss-help-modal', 'message'), Output('ss-help-modal', 'displayed'),
+     Output('eci-help-modal', 'message'), Output('eci-help-modal', 'displayed'),
+     Output('feedback-modal', 'message'), Output('feedback-modal', 'displayed'),
+     Output('multi-strata-container', 'style'), Output('simulator-container', 'style')],
+    [Input('zip-dropdown', 'value'), Input('strata-checklist', 'value'), Input('intervention-radio', 'value'),
+     Input('quarter-slider', 'value'), Input('lang-dropdown', 'value'), Input('info-btn', 'n_clicks'),
+     Input('strata-help', 'n_clicks'), Input('psi-help', 'n_clicks'), Input('ss-help', 'n_clicks'),
+     Input('eci-help', 'n_clicks'), Input('feedback-yes', 'n_clicks'), Input('feedback-no', 'n_clicks'),
+     Input('feedback-comment', 'value'), Input('toggle-advanced', 'n_clicks'),
+     Input('food-expand', 'n_clicks'), Input('psi-expand', 'n_clicks'), Input('ss-expand', 'n_clicks'),
+     Input('subsidy-slider', 'value'), Input('rcf-slider', 'value')]
+)
+def update_dashboard(zip_code, selected_strata, intervention, quarter, lang, info_clicks, strata_help_clicks,
+                    psi_help_clicks, ss_help_clicks, eci_help_clicks, feedback_yes_clicks, feedback_no_clicks,
+                    feedback_comment, advanced_clicks, food_expand_clicks, psi_expand_clicks, ss_expand_clicks,
+                    subsidy, rcf):
+    df = pd.DataFrame(app.layout['data-store'].data)
+    interventions = ['Baseline', 'Moderate', 'Aggressive'] if intervention == 'All' else [intervention]
+    df_filtered = df[(df['Intervention'].isin(interventions)) & (df['Quarter'] == quarter) & (df['Scenario'] == 'High_Impact')]
+
+    # Translations
+    trans = translations.get(lang, translations['EN'])
+
+    # Impact Summary
+    psi_mean = df_filtered[[f'PSI_{s}_mean' for s in key_psi_strata if s in selected_strata]].mean().mean()
+    ss_mean = df_filtered[[f'SS_{s}_mean' for s in key_ss_strata if s in selected_strata]].mean().mean()
+    psi_10th = df_filtered[[f'PSI_{s}_10th' for s in key_psi_strata if s in selected_strata]].mean().mean()
+    psi_90th = df_filtered[[f'PSI_{s}_90th' for s in key_psi_strata if s in selected_strata]].mean().mean()
+    ss_10th = df_filtered[[f'SS_{s}_10th' for s in key_ss_strata if s in selected_strata]].mean().mean()
+    ss_90th = df_filtered[[f'SS_{s}_90th' for s in key_ss_strata if s in selected_strata]].mean().mean()
+    food_risk = f"{trans['food_risk']}: {psi_mean * 0.8:.1f}% ({'High' if psi_mean > 35 else 'Moderate' if psi_mean > 20 else 'Low'})"
+    psi_text = f"{trans['psi']}: {psi_mean:.1f}%"
+    ss_text = f"{trans['ss']}: {ss_mean:.1f}%"
+    food_expand_text = f"{trans['food_risk']}: {psi_mean * 0.8:.1f}% ({psi_10th * 0.8:.1f}-{psi_90th * 0.8:.1f}%)"
+    psi_expand_text = f"{trans['psi']}: {psi_mean:.1f}% ({psi_10th:.1f}-{psi_90th:.1f}%)"
+    ss_expand_text = f"{trans['ss']}: {ss_mean:.1f}% ({ss_10th:.1f}-{ss_90th:.1f}%)"
+    narrative = trans['narrative'].format(quarter=quarter, risk=psi_mean * 0.8)
+
+    # Expand Details Visibility
+    food_expand_style = {'display': 'block' if food_expand_clicks % 2 == 1 else 'none', 'font-size': '12px'}
+    psi_expand_style = {'display': 'block' if psi_expand_clicks % 2 == 1 else 'none', 'font-size': '12px'}
+    ss_expand_style = {'display': 'block' if ss_expand_clicks % 2 == 1 else 'none', 'font-size': '12px'}
+
+    # Comparison Chart
+    comp_fig = go.Figure()
+    for i in interventions:
+        df_i = df[(df['Intervention'] == i) & (df['Quarter'] == quarter) & (df['Scenario'] == 'High_Impact')]
+        comp_fig.add_trace(go.Bar(
+            x=[i], y=df_i['ECI_mean'], marker_color=colors[i],
+            error_y=dict(type='data', array=df_i['ECI_90th']-df_i['ECI_mean'], arrayminus=df_i['ECI_mean']-df_i['ECI_10th']),
+            hovertemplate=f'ECI: %{{y:.2f}} (%{{error_y.arrayminus:.2f}}-%{{error_y.array:.2f}})<extra></extra>',
+            customdata=df_i[['ECI_10th', 'ECI_90th']].values
+        ))
+    comp_fig.update_layout(title=f'ECI at Q{quarter}', xaxis_title='Intervention', yaxis_title='ECI', height=300, template='plotly_white')
+
+    # Timeline Chart
+    time_fig = make_subplots(rows=2, cols=1, subplot_titles=('PSI', 'SS'))
+    for s in [s for s in selected_strata if s in key_psi_strata]:
+        for i in interventions:
+            df_s = df[(df['Intervention'] == i) & (df['Scenario'] == 'High_Impact')]
+            time_fig.add_trace(go.Scatter(
+                x=df_s['Quarter'], y=df_s[f'PSI_{s}_mean'], name=f'{s} ({i})',
+                line=dict(color=colors[i], dash=dashes[i]), hovertemplate=f'PSI {s}: %{{y:.1f}}% (%{{customdata[0]:.1f}}-%{{customdata[1]:.1f}})',
+                customdata=df_s[[f'PSI_{s}_10th', f'PSI_{s}_90th']].values
+            ), row=1, col=1)
+            if df_s[f'PSI_{s}_mean'].max() > 60:
+                time_fig.add_annotation(
+                    x=df_s['Quarter'][df_s[f'PSI_{s}_mean'].idxmax()], y=df_s[f'PSI_{s}_mean'].max(),
+                    text='⚡ Shock', showarrow=True, font=dict(color='red', size=10), row=1, col=1,
+                    hovertext=f'{s}: PSI > 60% in Q{df_s["Quarter"][df_s[f"PSI_{s}_mean"].idxmax()]}'
+                )
+    for s in [s for s in selected_strata if s in key_ss_strata]:
+        for i in interventions:
+            df_s = df[(df['Intervention'] == i) & (df['Scenario'] == 'High_Impact')]
+            time_fig.add_trace(go.Scatter(
+                x=df_s['Quarter'], y=df_s[f'SS_{s}_mean'], name=f'{s} ({i})',
+                line=dict(color=colors[i], dash=dashes[i]), hovertemplate=f'SS {s}: %{{y:.1f}}% (%{{customdata[0]:.1f}}-%{{customdata[1]:.1f}})',
+                customdata=df_s[[f'SS_{s}_10th', f'SS_{s}_90th']].values
+            ), row=2, col=1)
+            if df_s[f'SS_{s}_mean'].max() > 50:
+                time_fig.add_annotation(
+                    x=df_s['Quarter'][df_s[f'SS_{s}_mean'].idxmax()], y=df_s[f'SS_{s}_mean'].max(),
+                    text='🔄 Feedback', showarrow=True, font=dict(color='orange', size=10), row=2, col=1,
+                    hovertext=f'{s}: SS > 50% in Q{df_s["Quarter"][df_s[f"SS_{s}_mean"].idxmax()]}'
+                )
+    time_fig.update_layout(height=400, showlegend=True, template='plotly_white')
+
+    # Multi-Strata Chart
+    multi_fig = go.Figure()
+    for s in selected_strata:
+        for i in interventions:
+            df_s = df[(df['Intervention'] == i) & (df['Scenario'] == 'High_Impact')]
+            if s in key_psi_strata:
+                multi_fig.add_trace(go.Scatter(
+                    x=df_s['Quarter'], y=df_s[f'PSI_{s}_mean'], name=f'PSI {s} ({i})',
+                    line=dict(color=colors[i], dash=dashes[i]), hovertemplate=f'PSI {s}: %{{y:.1f}}% (%{{customdata[0]:.1f}}-%{{customdata[1]:.1f}})',
+                    customdata=df_s[[f'PSI_{s}_10th', f'PSI_{s}_90th']].values
+                ))
+            elif s in key_ss_strata:
+                multi_fig.add_trace(go.Scatter(
+                    x=df_s['Quarter'], y=df_s[f'SS_{s}_mean'], name=f'SS {s} ({i})',
+                    line=dict(color=colors[i], dash=dashes[i]), hovertemplate=f'SS {s}: %{{y:.1f}}% (%{{customdata[0]:.1f}}-%{{customdata[1]:.1f}})',
+                    customdata=df_s[[f'SS_{s}_10th', f'SS_{s}_90th']].values
+                ))
+    multi_fig.update_layout(title='Strata Comparison', xaxis_title='Quarter', yaxis_title='Value', height=300, template='plotly_white')
+
+    # Policy Simulator
+    sim_fig = go.Figure()
+    df_sim = df[(df['Quarter'] == quarter) & (df['Scenario'] == 'High_Impact')].copy()
+    for i in interventions:
+        df_i = df_sim[df_sim['Intervention'] == i]
+        eci_adj = df_i['ECI_mean'] * (1 - 0.01 * subsidy - 0.1 * rcf)
+        psi_adj = df_i[[f'PSI_{s}_mean' for s in key_psi_strata if s in selected_strata]].mean().mean() * (1 - 0.015 * subsidy)
+        sim_fig.add_trace(go.Bar(
+            x=[i], y=eci_adj, marker_color=colors[i], name=f'ECI {i}',
+            hovertemplate=f'Adjusted ECI: %{{y:.2f}}'
+        ))
+        sim_fig.add_trace(go.Bar(
+            x=[i], y=[psi_adj], marker_color=colors[i], opacity=0.5, name=f'PSI {i}',
+            hovertemplate=f'Adjusted PSI: %{{y:.1f}}%'
+        ))
+    sim_fig.update_layout(title='Policy Impact', xaxis_title='Intervention', yaxis_title='Adjusted Value', height=300, template='plotly_white')
+
+    # Community Board
+    board = [html.P(n['Narrative'], style={'font-size': '12px'}) for n in narratives if n['Quarter'] == quarter and n['Intervention'] in interventions]
+
+    # Modals
+    info_message = "This dashboard predicts community risks like food insecurity using economic and social stress models. Inspired by Argentina 2001 (subsidies cut stress by 10-15%), it shows how policies affect your area. Data is open for public review at github.com/community-impact/data. These are projections, not predictions."
+    info_displayed = info_clicks is not None and info_clicks > 0
+    strata_help_message = trans['strata_help']
+    strata_help_displayed = strata_help_clicks is not None and strata_help_clicks > 0
+    psi_help_message = trans['psi_tooltip']
+    psi_help_displayed = psi_help_clicks is not None and psi_help_clicks > 0
+    ss_help_message = trans['ss_tooltip']
+    ss_help_displayed = ss_help_clicks is not None and ss_help_clicks > 0
+    eci_help_message = trans['eci_tooltip']
+    eci_help_displayed = eci_help_clicks is not None and eci_help_clicks > 0
+    feedback_message = trans['feedback_confirm'] if (feedback_yes_clicks or feedback_no_clicks or feedback_comment) else ""
+    feedback_displayed = (feedback_yes_clicks is not None and feedback_yes_clicks > 0) or (feedback_no_clicks is not None and feedback_no_clicks > 0) or (feedback_comment is not None and feedback_comment.strip())
+
+    # Advanced Features Toggle
+    advanced_style = {'padding': '10px', 'display': 'block' if advanced_clicks % 2 == 1 else 'none'}
+
+    return (trans['title'], trans['about_data'], trans['strata_help'],
+            food_risk, psi_text, ss_text,
+            food_expand_text, food_expand_style,
+            psi_expand_text, psi_expand_style,
+            ss_expand_text, ss_expand_style,
+            narrative, trans['resources_tips'], trans['simulator_disclaimer'],
+            trans['resources_tips'], "Apply for subsidies at your local community center.",
+            trans['feedback_prompt'], trans['community_updates'],
+            comp_fig, time_fig, multi_fig, sim_fig, board,
+            info_message, info_displayed,
+            strata_help_message, strata_help_displayed,
+            psi_help_message, psi_help_displayed,
+            ss_help_message, ss_help_displayed,
+            eci_help_message, eci_help_displayed,
+            feedback_message, feedback_displayed,
+            advanced_style, advanced_style)
+
+# Download PNG
+@app.callback(
+    Output('download-png', 'data'),
+    Input('info-btn', 'n_clicks'),
+    prevent_initial_call=True
+)
+def download_png(n_clicks):
+    return dcc.send_file(f"dashboard_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
+
+# Run app
+if __name__ == '__main__':
+    app.run_server(debug=True, port=8050)
