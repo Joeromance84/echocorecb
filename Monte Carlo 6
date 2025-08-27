@@ -1,0 +1,302 @@
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import pandas as pd
+from datetime import datetime
+
+# --- Configuration ---
+key_psi_strata = ["Low_Income", "Black", "Children", "LI_Black_Children"]
+key_ss_strata = ["Urban", "Black", "Women", "UR_Black_Women"]
+
+scenarios = sorted(eci_summary["Scenario"].unique())
+interventions = sorted(eci_summary["Intervention"].unique())
+quarters = sorted(eci_summary["Quarter"].unique())
+
+colors = {"Baseline": "#9467bd", "Moderate": "#1f77b4", "Aggressive": "#2ca02c"}
+dashes = {"Baseline": "solid", "Moderate": "dash", "Aggressive": "dot"}
+
+# --- Create subplots ---
+fig = make_subplots(
+    rows=4, cols=2,
+    subplot_titles=(
+        "Elite Control Index (ECI) with Percentile Range",
+        "Population Stress Index (PSI) for Selected Strata",
+        "Social Strain (SS) for Selected Strata",
+        "ECI Comparison at Quarter 6",
+        "System Tipping Points & Historical Analogs",
+        "Real-Time Policy Suggestions",
+        "Quarterly Narrative Summaries",
+        "Intervention Sensitivity Analysis"
+    ),
+    specs=[
+        [{"type": "xy"}, {"type": "xy"}],
+        [{"type": "xy"}, {"type": "xy"}],
+        [{"type": "table"}, {"type": "table"}],
+        [{"type": "table"}, {"type": "table"}]
+    ],
+    vertical_spacing=0.08,
+    horizontal_spacing=0.1
+)
+
+# --- Enhanced helper function with hoverable percentiles ---
+def add_trace_with_ci(df, intervention, y_col, name, row, col):
+    df_int = df[df["Intervention"] == intervention]
+    
+    # Mean line with hover info for all percentiles
+    fig.add_trace(go.Scatter(
+        x=df_int["Quarter"],
+        y=df_int[f"{y_col}_mean"],
+        mode='lines+markers',
+        name=name,
+        line=dict(color=colors[intervention], dash=dashes[intervention]),
+        legendgroup=intervention,
+        hovertemplate=(
+            f"<b>{name}</b><br>Quarter: %{{x}}<br>Mean: %{{y:.2f}}<br>"
+            f"10th: %{{customdata[0]:.2f}}<br>90th: %{{customdata[1]:.2f}}<extra></extra>"
+        ),
+        customdata=df_int[[f"{y_col}_10th", f"{y_col}_90th"]].values
+    ), row=row, col=col)
+    
+    # Lower bound (hidden, just for fill)
+    fig.add_trace(go.Scatter(
+        x=df_int["Quarter"],
+        y=df_int[f"{y_col}_10th"],
+        mode='lines',
+        line=dict(width=0),
+        showlegend=False,
+        hoverinfo='skip'
+    ), row=row, col=col)
+    
+    # Upper bound with fill
+    fig.add_trace(go.Scatter(
+        x=df_int["Quarter"],
+        y=df_int[f"{y_col}_90th"],
+        mode='lines',
+        line=dict(width=0),
+        showlegend=False,
+        fill='tonexty',
+        fillcolor=f"{colors[intervention]}22",
+        hoverinfo='skip'
+    ), row=row, col=col)
+
+# --- Track trace indices ---
+trace_indices = {'eci': [], 'psi': {}, 'ss': {}, 'eci_q6': [], 'tables': []}
+for s in key_psi_strata: trace_indices['psi'][s] = []
+for s in key_ss_strata: trace_indices['ss'][s] = []
+
+# --- Add all traces (initially hidden) ---
+for scenario in scenarios:
+    df_s = eci_summary[eci_summary["Scenario"] == scenario]
+    for intervention in interventions:
+        # ECI traces
+        add_trace_with_ci(df_s, intervention, "ECI", f"ECI - {intervention} ({scenario})", 1, 1)
+        trace_indices['eci'].extend([len(fig.data)-3, len(fig.data)-2, len(fig.data)-1])
+        
+        # PSI traces
+        for stratum in key_psi_strata:
+            add_trace_with_ci(df_s, intervention, f"PSI_{stratum}", f"PSI {stratum} - {intervention} ({scenario})", 1, 2)
+            trace_indices['psi'][stratum].extend([len(fig.data)-3, len(fig.data)-2, len(fig.data)-1])
+        
+        # SS traces
+        for stratum in key_ss_strata:
+            add_trace_with_ci(df_s, intervention, f"SS_{stratum}", f"SS {stratum} - {intervention} ({scenario})", 2, 1)
+            trace_indices['ss'][stratum].extend([len(fig.data)-3, len(fig.data)-2, len(fig.data)-1])
+        
+        # ECI Q6 bars
+        df_bar_q6 = df_s[(df_s["Intervention"] == intervention) & (df_s["Quarter"] == 6)]
+        fig.add_trace(go.Bar(
+            x=[intervention],
+            y=df_bar_q6["ECI_mean"],
+            marker_color=colors[intervention],
+            name=f"Q6 ECI {intervention} ({scenario})",
+            showlegend=False,
+            hovertemplate='ECI: %{y:.2f}<extra></extra>'
+        ), row=2, col=2)
+        trace_indices['eci_q6'].append(len(fig.data)-1)
+
+# --- Add tables ---
+def add_table_trace(df, columns, row, col, title):
+    fig.add_trace(go.Table(
+        header=dict(values=columns, fill_color='#1f77b4', align='left', font=dict(color='white', size=12)),
+        cells=dict(values=[df[col].astype(str) for col in columns], fill_color='lavender', align='left', font=dict(size=11)),
+        name=title,
+        visible=True
+    ), row=row, col=col)
+    trace_indices['tables'].append(len(fig.data)-1)
+
+add_table_trace(pd.DataFrame(tipping_points), ["Scenario", "Intervention", "Quarter", "Outcome"], 3, 1, "Tipping Points")
+add_table_trace(pd.DataFrame(policy_suggestions), ["Scenario", "Intervention", "Quarter", "Suggestions"], 3, 2, "Policy Suggestions")
+add_table_trace(pd.DataFrame(narratives), ["Scenario", "Intervention", "Quarter", "Narrative"], 4, 1, "Narrative Summaries")
+add_table_trace(pd.DataFrame(sensitivity_results), ["Intervention", "Variation", "ECI_Mean"], 4, 2, "Sensitivity Analysis")
+
+# --- Global state for current selections ---
+current_state = {
+    'scenario': scenarios[0],
+    'intervention': interventions[0],
+    'psi_strata': [key_psi_strata[0]],  # Start with single selection, but support multiple
+    'ss_strata': [key_ss_strata[0]]     # Start with single selection, but support multiple
+}
+
+# --- Visibility management function ---
+def update_visibility(scenario, intervention, psi_strata, ss_strata):
+    """Update visibility based on current selections"""
+    visibility = [False] * len(fig.data)
+    
+    # ECI traces
+    for idx in trace_indices['eci']:
+        if f"({scenario})" in fig.data[idx].name and intervention in fig.data[idx].name:
+            visibility[idx] = True
+    
+    # ECI Q6 bars
+    for idx in trace_indices['eci_q6']:
+        if f"({scenario})" in fig.data[idx].name and intervention in fig.data[idx].name:
+            visibility[idx] = True
+    
+    # PSI traces (multiple strata)
+    for stratum in psi_strata:
+        for idx in trace_indices['psi'][stratum]:
+            if f"({scenario})" in fig.data[idx].name and intervention in fig.data[idx].name:
+                visibility[idx] = True
+    
+    # SS traces (multiple strata)
+    for stratum in ss_strata:
+        for idx in trace_indices['ss'][stratum]:
+            if f"({scenario})" in fig.data[idx].name and intervention in fig.data[idx].name:
+                visibility[idx] = True
+    
+    # Tables (always visible)
+    for idx in trace_indices['tables']:
+        visibility[idx] = True
+    
+    return visibility
+
+# --- Dynamic annotation function ---
+def update_annotations(scenario, intervention, psi_strata, ss_strata):
+    """Update crisis annotations based on current data"""
+    annotations = []
+    df_filtered = eci_summary[(eci_summary["Scenario"] == scenario) & 
+                             (eci_summary["Intervention"] == intervention)]
+    
+    # PSI shock annotations (>60)
+    for stratum in psi_strata:
+        df_stratum = df_filtered[df_filtered["Quarter"].isin(quarters)]
+        for _, row in df_stratum.iterrows():
+            if row[f"PSI_{stratum}_mean"] > 60:
+                annotations.append(dict(
+                    x=row["Quarter"],
+                    y=row[f"PSI_{stratum}_mean"],
+                    xref="x2",
+                    yref="y2",
+                    text="⚡ Shock",
+                    showarrow=True,
+                    arrowhead=2,
+                    arrowsize=1,
+                    arrowcolor="orange",
+                    font=dict(color="orange", size=10)
+                ))
+    
+    # SS feedback loop annotations (>50)
+    for stratum in ss_strata:
+        df_stratum = df_filtered[df_filtered["Quarter"].isin(quarters)]
+        for _, row in df_stratum.iterrows():
+            if row[f"SS_{stratum}_mean"] > 50:
+                annotations.append(dict(
+                    x=row["Quarter"],
+                    y=row[f"SS_{stratum}_mean"],
+                    xref="x3",
+                    yref="y3",
+                    text="🔄 Feedback",
+                    showarrow=True,
+                    arrowhead=2,
+                    arrowsize=1,
+                    arrowcolor="red",
+                    font=dict(color="red", size=10)
+                ))
+    
+    return annotations
+
+# --- Set initial visibility ---
+initial_visibility = update_visibility(current_state['scenario'], current_state['intervention'], 
+                                      current_state['psi_strata'], current_state['ss_strata'])
+for i, visible in enumerate(initial_visibility):
+    fig.data[i].visible = visible
+
+# --- Dropdown creation ---
+# Scenario dropdown
+scenario_buttons = []
+for scenario in scenarios:
+    scenario_buttons.append(dict(
+        label=scenario,
+        method="update",
+        args=[{"visible": update_visibility(scenario, current_state['intervention'], 
+                                           current_state['psi_strata'], current_state['ss_strata']),
+               "annotations": update_annotations(scenario, current_state['intervention'],
+                                               current_state['psi_strata'], current_state['ss_strata'])},
+              {"title": f"Scenario: {scenario} | Intervention: {current_state['intervention']}"}]
+    ))
+
+# Intervention dropdown
+intervention_buttons = []
+for intervention in interventions:
+    intervention_buttons.append(dict(
+        label=intervention,
+        method="update",
+        args=[{"visible": update_visibility(current_state['scenario'], intervention,
+                                           current_state['psi_strata'], current_state['ss_strata']),
+               "annotations": update_annotations(current_state['scenario'], intervention,
+                                               current_state['psi_strata'], current_state['ss_strata'])},
+              {"title": f"Scenario: {current_state['scenario']} | Intervention: {intervention}"}]
+    ))
+
+# PSI strata dropdown (multi-select)
+psi_buttons = []
+for stratum in key_psi_strata:
+    psi_buttons.append(dict(
+        label=stratum,
+        method="update",
+        args=[{"visible": update_visibility(current_state['scenario'], current_state['intervention'],
+                                           [stratum], current_state['ss_strata']),
+               "annotations": update_annotations(current_state['scenario'], current_state['intervention'],
+                                               [stratum], current_state['ss_strata'])},
+              {"title": f"PSI: {stratum}"}]
+    ))
+
+# SS strata dropdown (multi-select)
+ss_buttons = []
+for stratum in key_ss_strata:
+    ss_buttons.append(dict(
+        label=stratum,
+        method="update",
+        args=[{"visible": update_visibility(current_state['scenario'], current_state['intervention'],
+                                           current_state['psi_strata'], [stratum]),
+               "annotations": update_annotations(current_state['scenario'], current_state['intervention'],
+                                               current_state['psi_strata'], [stratum])},
+              {"title": f"SS: {stratum}"}]
+    ))
+
+# --- Final layout ---
+fig.update_layout(
+    updatemenus=[
+        dict(buttons=scenario_buttons, x=0.1, y=1.15, xanchor='left', yanchor='top'),
+        dict(buttons=intervention_buttons, x=0.3, y=1.15, xanchor='left', yanchor='top'),
+        dict(buttons=psi_buttons, x=0.5, y=1.15, xanchor='left', yanchor='top'),
+        dict(buttons=ss_buttons, x=0.7, y=1.15, xanchor='left', yanchor='top')
+    ],
+    height=1400,
+    title=f"Policy Intervention Dashboard | Scenario: {current_state['scenario']} | Intervention: {current_state['intervention']}",
+    annotations=update_annotations(current_state['scenario'], current_state['intervention'],
+                                  current_state['psi_strata'], current_state['ss_strata'])
+)
+
+# --- Axes labels ---
+fig.update_xaxes(title_text="Quarter", row=1, col=1)
+fig.update_xaxes(title_text="Quarter", row=1, col=2)
+fig.update_xaxes(title_text="Quarter", row=2, col=1)
+fig.update_xaxes(title_text="Intervention", row=2, col=2)
+fig.update_yaxes(title_text="ECI", row=1, col=1)
+fig.update_yaxes(title_text="PSI", row=1, col=2)
+fig.update_yaxes(title_text="SS", row=2, col=1)
+fig.update_yaxes(title_text="ECI at Q6", row=2, col=2)
+
+# --- Save dashboard ---
+fig.write_html("policy_intervention_dashboard.html")
+print("Dashboard saved as 'policy_intervention_dashboard.html'")
