@@ -1,0 +1,130 @@
+# ==================== CONFIGURATION & REPRODUCIBILITY ====================
+import os
+
+# Reproducibility
+np.random.seed(42)
+
+# Cache path for base Monte Carlo data
+CACHE_PATH = "df_strata_cache.parquet"
+
+# Intervention target strata (parameterized)
+intervention_targets = {
+    "FEI": ["Low_Income", "Black", "Brown", "Children", "Elderly", "LI_Black_Children"],
+    "SS": ["Urban", "Black", "Brown", "Women", "UR_Black_Women"],
+    "PSI": ["Black", "Brown", "LI_Black_Children"]
+}
+
+# ==================== MAIN EXECUTION ====================
+start_time = time.time()
+
+# 1. Configuration
+intervention_scenarios = {
+    "Baseline": {"FEI_reduction": 0.0, "SS_reduction": 0.0, "RCF_boost": 0.0, "PSI_reduction": 0.0},
+    "Moderate": {"FEI_reduction": 0.1, "SS_reduction": 0.1, "RCF_boost": 0.1, "PSI_reduction": 0.05},
+    "Aggressive": {"FEI_reduction": 0.15, "SS_reduction": 0.15, "RCF_boost": 0.2, "PSI_reduction": 0.15}
+}
+
+# Vulnerable strata for metrics
+strata_psi_vulnerable = ["Low_Income", "Black", "Brown", "Children", "Elderly", "LI_Black_Children"]
+strata_ss_vulnerable = ["Urban", "Black", "Brown", "Women", "UR_Black_Women"]
+
+# 2. Generate or load base data
+if os.path.exists(CACHE_PATH):
+    print("Loading cached base Monte Carlo data...")
+    df_strata = pd.read_parquet(CACHE_PATH)
+else:
+    df_strata = generate_base_data()
+    df_strata.to_parquet(CACHE_PATH)
+    print(f"Base data cached to {CACHE_PATH}")
+
+# Resolve strata list dynamically from FEI columns
+strata_list = [col.split('_')[1] for col in df_strata.columns if col.startswith('FEI_')]
+
+# 3. Apply interventions and feedback
+def apply_interventions_vectorized_updated(df_strata, intervention_scenarios, strata_list):
+    """
+    Updated intervention engine using parameterized intervention targets.
+    """
+    print("Applying interventions and shocks (vectorized, updated)...")
+    dfs = []
+    for int_name, params in intervention_scenarios.items():
+        df_temp = df_strata.copy()
+        df_temp['Intervention'] = int_name
+
+        fei_factor = 1 - params['FEI_reduction']
+        ss_factor = 1 - params['SS_reduction']
+        psi_factor = 1 - params['PSI_reduction']
+
+        # Apply reductions using parameterized targets
+        for stratum in strata_list:
+            if stratum in intervention_targets['FEI']:
+                df_temp[f'FEI_{stratum}'] *= fei_factor
+            if stratum in intervention_targets['SS']:
+                df_temp[f'SS_{stratum}'] *= ss_factor
+            if stratum in intervention_targets['PSI']:
+                df_temp[f'PSI_{stratum}'] *= psi_factor
+
+        # Apply RCF boost
+        df_temp['RCF'] += params['RCF_boost']
+        df_temp['Retreat_Probability'] = np.clip(
+            df_temp['Retreat_Probability'] + params['RCF_boost'] * 20, 0, 100
+        )
+
+        # Vectorized stochastic shocks
+        shock_mask = np.random.random(len(df_temp)) < 0.05
+        shock_magnitude = np.random.uniform(1.1, 1.2, len(df_temp))
+        fei_cols = [col for col in df_temp.columns if col.startswith('FEI_')]
+        ss_cols = [col for col in df_temp.columns if col.startswith('SS_')]
+        psi_cols = [col for col in df_temp.columns if col.startswith('PSI_')]
+
+        df_temp.loc[shock_mask, fei_cols] = df_temp.loc[shock_mask, fei_cols].mul(shock_magnitude[shock_mask], axis=0)
+        df_temp.loc[shock_mask, ss_cols] = df_temp.loc[shock_mask, ss_cols].mul(shock_magnitude[shock_mask], axis=0)
+        df_temp.loc[shock_mask, psi_cols] = df_temp.loc[shock_mask, psi_cols].mul(shock_magnitude[shock_mask], axis=0)
+
+        dfs.append(df_temp)
+
+    return pd.concat(dfs, ignore_index=True)
+
+def apply_feedback_loop_vectorized_updated(df):
+    """
+    Robust feedback loop: high SS in current quarter boosts PSI next quarter.
+    """
+    print("Applying feedback loop (robust, vectorized)...")
+    df_sorted = df.sort_values(['Scenario', 'Intervention', 'Iteration', 'Quarter'])
+    df_next = df_sorted.groupby(['Scenario', 'Intervention', 'Iteration']).shift(-1)
+    psi_cols = [col for col in df.columns if col.startswith('PSI_')]
+    ss_vuln_cols = [f"SS_{s}" for s in strata_ss_vulnerable]
+
+    high_ss_mask = df_sorted[ss_vuln_cols].mean(axis=1) > 50
+    df_next.loc[high_ss_mask, psi_cols] *= 1.1  # Apply 10% boost to next quarter
+
+    # Merge back the updated next-quarter PSI values
+    df_sorted.loc[df_next.index, psi_cols] = df_next[psi_cols]
+    return df_sorted
+
+df_interventions = apply_interventions_vectorized_updated(df_strata, intervention_scenarios, strata_list)
+df_interventions = apply_feedback_loop_vectorized_updated(df_interventions)
+df_interventions = calculate_system_metrics(df_interventions, strata_psi_vulnerable, strata_ss_vulnerable)
+
+# 4. Create summary statistics with explicit percentile naming
+def create_summary_statistics_named(df_interventions):
+    print("Creating summary statistics (named percentiles)...")
+    summary = df_interventions.groupby(["Scenario", "Quarter", "Intervention"]).agg(
+        ECI_mean=("ECI", "mean"),
+        ECI_10=("ECI", lambda x: np.percentile(x, 10)),
+        ECI_90=("ECI", lambda x: np.percentile(x, 90)),
+        CL_mean=("CL", "mean"),
+        IE_mean=("IE", "mean"),
+        **{f"PSI_{s}_mean": (f"PSI_{s}", "mean") for s in strata_psi_vulnerable},
+        **{f"PSI_{s}_10": (f"PSI_{s}", lambda x: np.percentile(x, 10)) for s in strata_psi_vulnerable},
+        **{f"PSI_{s}_90": (f"PSI_{s}", lambda x: np.percentile(x, 90)) for s in strata_psi_vulnerable},
+        **{f"SS_{s}_mean": (f"SS_{s}", "mean") for s in strata_ss_vulnerable},
+        **{f"SS_{s}_10": (f"SS_{s}", lambda x: np.percentile(x, 10)) for s in strata_ss_vulnerable},
+        **{f"SS_{s}_90": (f"SS_{s}", lambda x: np.percentile(x, 90)) for s in strata_ss_vulnerable},
+    ).round(2)
+    return summary.reset_index()
+
+eci_summary = create_summary_statistics_named(df_interventions)
+
+print(f"Total execution time: {time.time() - start_time:.2f} seconds")
+print("Data ready for dashboard visualization.")
