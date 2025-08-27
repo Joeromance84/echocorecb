@@ -1,0 +1,228 @@
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import pandas as pd
+from datetime import datetime
+
+# --- Configuration ---
+key_psi_strata = ["Low_Income", "Black", "Children", "LI_Black_Children"]
+key_ss_strata = ["Urban", "Black", "Women", "UR_Black_Women"]
+
+scenarios = sorted(eci_summary["Scenario"].unique())
+interventions = sorted(eci_summary["Intervention"].unique())
+quarters = sorted(eci_summary["Quarter"].unique())
+
+colors = {"Baseline": "#9467bd", "Moderate": "#1f77b4", "Aggressive": "#2ca02c"}
+dashes = {"Baseline": "solid", "Moderate": "dash", "Aggressive": "dot"}
+
+# --- Create subplots ---
+fig = make_subplots(
+    rows=4, cols=2,
+    subplot_titles=(
+        "Elite Control Index (ECI) with Percentile Range",
+        "Population Stress Index (PSI) for Selected Strata",
+        "Social Strain (SS) for Selected Strata",
+        "ECI Comparison at Quarter 6",
+        "System Tipping Points & Historical Analogs",
+        "Real-Time Policy Suggestions",
+        "Quarterly Narrative Summaries",
+        "Intervention Sensitivity Analysis"
+    ),
+    specs=[
+        [{"type": "xy"}, {"type": "xy"}],
+        [{"type": "xy"}, {"type": "xy"}],
+        [{"type": "table"}, {"type": "table"}],
+        [{"type": "table"}, {"type": "table"}]
+    ],
+    vertical_spacing=0.08,
+    horizontal_spacing=0.1
+)
+
+# --- Track trace indices for dynamic control ---
+trace_indices = {
+    'eci': [],          # ECI traces (mean, 10th, 90th for each scenario+intervention)
+    'psi': {},          # PSI traces by stratum: {stratum: [trace_indices]}
+    'ss': {},           # SS traces by stratum: {stratum: [trace_indices]}
+    'eci_q6': [],       # ECI Q6 bar traces
+    'tables': []        # Table traces
+}
+
+# Initialize PSI and SS trace dictionaries
+for stratum in key_psi_strata:
+    trace_indices['psi'][stratum] = []
+for stratum in key_ss_strata:
+    trace_indices['ss'][stratum] = []
+
+# --- Add traces for ALL scenarios and interventions (initially hidden) ---
+for scenario in scenarios:
+    df_s = eci_summary[eci_summary["Scenario"] == scenario]
+    
+    for intervention in interventions:
+        # ECI traces (mean + CI)
+        add_trace_with_ci(df_s, intervention, "ECI", f"ECI - {intervention} ({scenario})", 1, 1, visible=False)
+        trace_indices['eci'].extend([len(fig.data)-3, len(fig.data)-2, len(fig.data)-1])
+        
+        # PSI traces for all strata
+        for stratum in key_psi_strata:
+            add_trace_with_ci(df_s, intervention, f"PSI_{stratum}", f"PSI {stratum} - {intervention} ({scenario})", 1, 2, visible=False)
+            trace_indices['psi'][stratum].extend([len(fig.data)-3, len(fig.data)-2, len(fig.data)-1])
+        
+        # SS traces for all strata
+        for stratum in key_ss_strata:
+            add_trace_with_ci(df_s, intervention, f"SS_{stratum}", f"SS {stratum} - {intervention} ({scenario})", 2, 1, visible=False)
+            trace_indices['ss'][stratum].extend([len(fig.data)-3, len(fig.data)-2, len(fig.data)-1])
+        
+        # ECI Q6 bar
+        df_bar_q6 = df_s[(df_s["Intervention"] == intervention) & (df_s["Quarter"] == 6)]
+        fig.add_trace(go.Bar(
+            x=[intervention], y=df_bar_q6["ECI_mean"],
+            marker_color=colors[intervention],
+            name=f"Q6 ECI {intervention} ({scenario})",
+            showlegend=False,
+            visible=False,
+            hovertemplate='ECI: %{y:.2f}<extra></extra>'
+        ), row=2, col=2)
+        trace_indices['eci_q6'].append(len(fig.data)-1)
+
+# --- Add tables (always visible) ---
+def add_table_trace(df, columns, row, col, title):
+    fig.add_trace(go.Table(
+        header=dict(values=columns, fill_color='#1f77b4', align='left', font=dict(color='white', size=12)),
+        cells=dict(values=[df[col].astype(str) for col in columns], fill_color='lavender', align='left', font=dict(size=11)),
+        name=title,
+        visible=True
+    ), row=row, col=col)
+    trace_indices['tables'].append(len(fig.data)-1)
+
+add_table_trace(pd.DataFrame(tipping_points), ["Scenario", "Intervention", "Quarter", "Outcome"], 3, 1, "Tipping Points")
+add_table_trace(pd.DataFrame(policy_suggestions), ["Scenario", "Intervention", "Quarter", "Suggestions"], 3, 2, "Policy Suggestions")
+add_table_trace(pd.DataFrame(narratives), ["Scenario", "Intervention", "Quarter", "Narrative"], 4, 1, "Narrative Summaries")
+add_table_trace(pd.DataFrame(sensitivity_results), ["Intervention", "Variation", "ECI_Mean"], 4, 2, "Sensitivity Analysis")
+
+# --- Create dropdown buttons ---
+default_scenario = scenarios[0]
+default_intervention = interventions[0]
+default_psi_stratum = key_psi_strata[0]
+default_ss_stratum = key_ss_strata[0]
+
+# Scenario+Intervention dropdown
+scenario_intervention_buttons = []
+for scenario in scenarios:
+    for intervention in interventions:
+        # Build visibility array
+        visibility = [False] * len(fig.data)
+        
+        # Show traces for this scenario+intervention combination
+        for idx in trace_indices['eci']:
+            if f"({scenario})" in fig.data[idx].name and intervention in fig.data[idx].name:
+                visibility[idx] = True
+        
+        for idx in trace_indices['eci_q6']:
+            if f"({scenario})" in fig.data[idx].name and intervention in fig.data[idx].name:
+                visibility[idx] = True
+        
+        # Show currently selected strata
+        for idx in trace_indices['psi'][default_psi_stratum]:
+            if f"({scenario})" in fig.data[idx].name and intervention in fig.data[idx].name:
+                visibility[idx] = True
+        
+        for idx in trace_indices['ss'][default_ss_stratum]:
+            if f"({scenario})" in fig.data[idx].name and intervention in fig.data[idx].name:
+                visibility[idx] = True
+        
+        # Always show tables
+        for idx in trace_indices['tables']:
+            visibility[idx] = True
+        
+        scenario_intervention_buttons.append(dict(
+            label=f"{scenario}/{intervention}",
+            method="update",
+            args=[{"visible": visibility},
+                  {"title": f"Scenario: {scenario} | Intervention: {intervention} | PSI: {default_psi_stratum} | SS: {default_ss_stratum}"}]
+        ))
+
+# PSI Stratum dropdown
+psi_buttons = []
+for stratum in key_psi_strata:
+    visibility = [trace.visible for trace in fig.data]  # Maintain current visibility
+    
+    # Hide all PSI traces
+    for stratum_traces in trace_indices['psi'].values():
+        for idx in stratum_traces:
+            visibility[idx] = False
+    
+    # Show selected PSI stratum
+    for idx in trace_indices['psi'][stratum]:
+        visibility[idx] = fig.data[idx].visible  # Keep original visibility state
+    
+    psi_buttons.append(dict(
+        label=stratum,
+        method="update",
+        args=[{"visible": visibility},
+              {"title": f"PSI Stratum: {stratum}"}]
+    ))
+
+# SS Stratum dropdown
+ss_buttons = []
+for stratum in key_ss_strata:
+    visibility = [trace.visible for trace in fig.data]  # Maintain current visibility
+    
+    # Hide all SS traces
+    for stratum_traces in trace_indices['ss'].values():
+        for idx in stratum_traces:
+            visibility[idx] = False
+    
+    # Show selected SS stratum
+    for idx in trace_indices['ss'][stratum]:
+        visibility[idx] = fig.data[idx].visible  # Keep original visibility state
+    
+    ss_buttons.append(dict(
+        label=stratum,
+        method="update",
+        args=[{"visible": visibility},
+              {"title": f"SS Stratum: {stratum}"}]
+    ))
+
+# --- Set initial visibility for default view ---
+initial_visibility = [False] * len(fig.data)
+for idx in trace_indices['eci']:
+    if f"({default_scenario})" in fig.data[idx].name and default_intervention in fig.data[idx].name:
+        initial_visibility[idx] = True
+for idx in trace_indices['eci_q6']:
+    if f"({default_scenario})" in fig.data[idx].name and default_intervention in fig.data[idx].name:
+        initial_visibility[idx] = True
+for idx in trace_indices['psi'][default_psi_stratum]:
+    if f"({default_scenario})" in fig.data[idx].name and default_intervention in fig.data[idx].name:
+        initial_visibility[idx] = True
+for idx in trace_indices['ss'][default_ss_stratum]:
+    if f"({default_scenario})" in fig.data[idx].name and default_intervention in fig.data[idx].name:
+        initial_visibility[idx] = True
+for idx in trace_indices['tables']:
+    initial_visibility[idx] = True
+
+for i, visible in enumerate(initial_visibility):
+    fig.data[i].visible = visible
+
+# --- Update layout with dropdowns ---
+fig.update_layout(
+    updatemenus=[
+        dict(buttons=scenario_intervention_buttons, x=0.1, y=1.15, xanchor='left', yanchor='top'),
+        dict(buttons=psi_buttons, x=0.4, y=1.15, xanchor='left', yanchor='top'),
+        dict(buttons=ss_buttons, x=0.7, y=1.15, xanchor='left', yanchor='top')
+    ],
+    height=1400,
+    title=f"Policy Intervention Dashboard | Scenario: {default_scenario} | Intervention: {default_intervention} | PSI: {default_psi_stratum} | SS: {default_ss_stratum}"
+)
+
+# --- Final layout adjustments ---
+fig.update_xaxes(title_text="Quarter", row=1, col=1)
+fig.update_xaxes(title_text="Quarter", row=1, col=2)
+fig.update_xaxes(title_text="Quarter", row=2, col=1)
+fig.update_xaxes(title_text="Intervention", row=2, col=2)
+fig.update_yaxes(title_text="ECI", row=1, col=1)
+fig.update_yaxes(title_text="PSI", row=1, col=2)
+fig.update_yaxes(title_text="SS", row=2, col=1)
+fig.update_yaxes(title_text="ECI at Q6", row=2, col=2)
+
+# --- Save dashboard ---
+fig.write_html("policy_intervention_dashboard.html")
+print("Dashboard saved as 'policy_intervention_dashboard.html'")
