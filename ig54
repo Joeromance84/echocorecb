@@ -1,0 +1,167 @@
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import pandas as pd
+from datetime import datetime
+
+# --- Configuration ---
+key_psi_strata = ["Low_Income", "Black", "Children", "LI_Black_Children"]
+key_ss_strata = ["Urban", "Black", "Women", "UR_Black_Women"]
+
+scenarios = sorted(eci_summary["Scenario"].unique())
+interventions = sorted(eci_summary["Intervention"].unique())
+quarters = sorted(eci_summary["Quarter"].unique())
+
+colors = {"Baseline": "#9467bd", "Moderate": "#1f77b4", "Aggressive": "#2ca02c"}
+dashes = {"Baseline": "solid", "Moderate": "dash", "Aggressive": "dot"}
+
+fig = make_subplots(
+    rows=4, cols=2,
+    subplot_titles=(
+        "Elite Control Index (ECI) with Percentile Range",
+        "Population Stress Index (PSI) for Selected Strata",
+        "Social Strain (SS) for Selected Strata",
+        "ECI Comparison at Quarter 6",
+        "System Tipping Points & Historical Analogs",
+        "Real-Time Policy Suggestions",
+        "Quarterly Narrative Summaries",
+        "Intervention Sensitivity Analysis"
+    ),
+    specs=[
+        [{"type": "xy"}, {"type": "xy"}],
+        [{"type": "xy"}, {"type": "xy"}],
+        [{"type": "table"}, {"type": "table"}],
+        [{"type": "table"}, {"type": "table"}]
+    ],
+    vertical_spacing=0.08,
+    horizontal_spacing=0.1
+)
+
+def add_trace_with_ci(df, intervention, y_col, name, row, col, visible):
+    df_int = df[df["Intervention"] == intervention]
+    
+    fig.add_trace(go.Scatter(
+        x=df_int["Quarter"], y=df_int[f"{y_col}_mean"],
+        mode='lines', name=name,
+        line=dict(color=colors[intervention], dash=dashes[intervention]),
+        legendgroup=intervention, showlegend=True,
+        visible=visible
+    ), row=row, col=col)
+
+    fig.add_trace(go.Scatter(
+        x=df_int["Quarter"], y=df_int[f"{y_col}_10th"],
+        mode='lines', line=dict(width=0), showlegend=False,
+        hoverinfo='skip', visible=visible
+    ), row=row, col=col)
+
+    fig.add_trace(go.Scatter(
+        x=df_int["Quarter"], y=df_int[f"{y_col}_90th"],
+        mode='lines', line=dict(width=0), showlegend=False,
+        fill='tonexty', fillcolor=f"{colors[intervention]}22",
+        hoverinfo='skip', visible=visible
+    ), row=row, col=col)
+
+# Add all traces, but keep them hidden except the default for scenario/intervention
+default_scenario = scenarios[0]
+default_intervention = interventions[0]
+
+trace_visibility = []
+
+for scenario in scenarios:
+    for intervention in interventions:
+        df_s = eci_summary[eci_summary["Scenario"] == scenario]
+
+        # ECI traces
+        add_trace_with_ci(df_s, intervention, "ECI", f"ECI - {intervention}", 1, 1,
+                          visible=(scenario == default_scenario and intervention == default_intervention))
+
+        # PSI traces for all key strata
+        for stratum in key_psi_strata:
+            add_trace_with_ci(df_s, intervention, f"PSI_{stratum}",
+                              f"PSI {stratum} - {intervention}", 1, 2,
+                              visible=(scenario == default_scenario and intervention == default_intervention))
+        
+        # SS traces for all key strata
+        for stratum in key_ss_strata:
+            add_trace_with_ci(df_s, intervention, f"SS_{stratum}",
+                              f"SS {stratum} - {intervention}", 2, 1,
+                              visible=(scenario == default_scenario and intervention == default_intervention))
+
+# ECI Q6 bar comparison
+for scenario in scenarios:
+    for intervention in interventions:
+        df_bar = eci_summary[(eci_summary["Scenario"] == scenario) & 
+                             (eci_summary["Intervention"] == intervention) & 
+                             (eci_summary["Quarter"] == 6)]
+        visible = (scenario == default_scenario and intervention == default_intervention)
+        fig.add_trace(go.Bar(
+            x=[intervention], y=df_bar["ECI_mean"],
+            marker_color=colors[intervention], name=f"Q6 ECI {intervention}",
+            showlegend=False, visible=visible
+        ), row=2, col=2)
+
+# Add table traces (always visible)
+def add_table(df, columns, row, col):
+    fig.add_trace(go.Table(
+        header=dict(values=columns,
+                    fill_color='#1f77b4', align='left', font=dict(color='white', size=12)),
+        cells=dict(values=[df[col].astype(str) for col in columns],
+                   fill_color='lavender', align='left', font=dict(size=11))
+    ), row=row, col=col)
+
+add_table(pd.DataFrame(tipping_points), ["Scenario", "Intervention", "Quarter", "Outcome"], 3, 1)
+add_table(pd.DataFrame(policy_suggestions), ["Scenario", "Intervention", "Quarter", "Suggestions"], 3, 2)
+add_table(pd.DataFrame(narratives), ["Scenario", "Intervention", "Quarter", "Narrative"], 4, 1)
+add_table(pd.DataFrame(sensitivity_results), ["Intervention", "Variation", "ECI_Mean"], 4, 2)
+
+# Calculate visibility list per scenario+intervention for all traces for dropdown
+total_traces = len(fig.data)
+buttons = []
+
+for scenario in scenarios:
+    for intervention in interventions:
+        vis = []
+        for trace in fig.data:
+            name = trace.name
+            # Conditions for visibility: traces have names coded like "ECI - Baseline" or "PSI Low_Income - Moderate"
+            if (scenario == default_scenario):  # Restrict to default scenario for now
+                if intervention in name:
+                    vis.append(True)
+                else:
+                    vis.append(False)
+            else:
+                vis.append(False)  # Extend to support all scenarios if preferred
+        buttons.append(dict(
+            label=f"{scenario} / {intervention}",
+            method="update",
+            args=[{"visible": vis},
+                  {"title": f"Scenario: {scenario} – Intervention: {intervention} | Generated {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"}]
+        ))
+
+fig.update_layout(
+    updatemenus=[dict(
+        active=0,
+        buttons=buttons,
+        x=0.1,
+        y=1.1,
+        xanchor='left',
+        yanchor='top',
+        direction='down'
+    )],
+    height=1400,
+    title=f"Policy Intervention Dashboard | Scenario: {default_scenario} | Intervention: {default_intervention}"
+)
+
+# Axes labels
+fig.update_xaxes(title_text="Quarter", row=1, col=1)
+fig.update_xaxes(title_text="Quarter", row=1, col=2)
+fig.update_xaxes(title_text="Quarter", row=2, col=1)
+fig.update_xaxes(title_text="Intervention", row=2, col=2)
+
+fig.update_yaxes(title_text="ECI", row=1, col=1)
+fig.update_yaxes(title_text="PSI", row=1, col=2)
+fig.update_yaxes(title_text="SS", row=2, col=1)
+fig.update_yaxes(title_text="ECI at Q6", row=2, col=2)
+
+# Save HTML
+fig.write_html("policy_intervention_dashboard.html")
+print("Dashboard saved as 'policy_intervention_dashboard.html'")
