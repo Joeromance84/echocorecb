@@ -1,0 +1,208 @@
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import time
+
+# ==================== CONFIGURATION & DATA PREP ====================
+def generate_base_data():
+    """Generates a base df_strata if not provided from a prior simulation."""
+    print("Generating base simulation data...")
+    scenarios = ['High_Impact', 'Medium_Impact', 'Low_Impact']
+    quarters = np.arange(1, 13)
+    n_iterations = 100  # Number of Monte Carlo iterations per scenario
+
+    data = []
+    for scenario in scenarios:
+        for quarter in quarters:
+            for i in range(n_iterations):
+                # Base parameters drift over quarters
+                base_q = quarter / 12.0
+                if scenario == 'High_Impact':
+                    usd_decline = np.random.normal(loc=80 + base_q * 15, scale=5)
+                    poverty_inc = np.random.normal(loc=40 + base_q * 30, scale=7)
+                    crime_inc = np.random.normal(loc=50 + base_q * 40, scale=10)
+                    retreat_prob = np.random.normal(loc=30 + base_q * 50, scale=8)
+                    ep = np.random.normal(loc=0.7 - base_q * 0.4, scale=0.1) # Elite Power declines
+                elif scenario == 'Medium_Impact':
+                    usd_decline = np.random.normal(loc=50 + base_q * 10, scale=7)
+                    poverty_inc = np.random.normal(loc=25 + base_q * 15, scale=5)
+                    crime_inc = np.random.normal(loc=30 + base_q * 20, scale=7)
+                    retreat_prob = np.random.normal(loc=15 + base_q * 20, scale=5)
+                    ep = np.random.normal(loc=0.8 - base_q * 0.2, scale=0.08)
+                else:  # Low_Impact
+                    usd_decline = np.random.normal(loc=20 + base_q * 5, scale=4)
+                    poverty_inc = np.random.normal(loc=10 + base_q * 5, scale=3)
+                    crime_inc = np.random.normal(loc=15 + base_q * 10, scale=4)
+                    retreat_prob = np.random.normal(loc=5 + base_q * 5, scale=3)
+                    ep = np.random.normal(loc=0.9 - base_q * 0.1, scale=0.05)
+
+                # Clip values to sensible ranges
+                usd_decline = np.clip(usd_decline, 0, 100)
+                poverty_inc = np.clip(poverty_inc, 0, 100)
+                crime_inc = np.clip(crime_inc, 0, 100)
+                retreat_prob = np.clip(retreat_prob, 0, 100)
+                ep = np.clip(ep, 0, 1)
+
+                data.append({
+                    'Scenario': scenario, 'Quarter': quarter, 'Iteration': i,
+                    'USD_Decline': usd_decline, 'Poverty_Increase': poverty_inc,
+                    'Crime_Increase': crime_inc, 'Retreat_Probability': retreat_prob,
+                    'EP': ep, 'RCF': np.random.normal(0.5, 0.2)  # Base RCF
+                })
+
+    df_base = pd.DataFrame(data)
+    strata_def = {
+        "Working_Class": {"USD_weight": 0.4, "Poverty_weight": 0.4, "Crime_weight": 0.15, "Retreat_weight": 0.05, "FEI_USD_mult": 0.5, "FEI_Poverty_mult": 1.0, "SS_Crime_mult": 0.5},
+        "Low_Income": {"USD_weight": 0.5, "Poverty_weight": 0.5, "Crime_weight": 0.1, "Retreat_weight": 0.05, "FEI_USD_mult": 0.6, "FEI_Poverty_mult": 1.2, "SS_Crime_mult": 0.4},
+        "Urban": {"USD_weight": 0.3, "Poverty_weight": 0.3, "Crime_weight": 0.3, "Retreat_weight": 0.1, "FEI_USD_mult": 0.4, "FEI_Poverty_mult": 0.8, "SS_Crime_mult": 0.7},
+        "Rural": {"USD_weight": 0.5, "Poverty_weight": 0.4, "Crime_weight": 0.1, "Retreat_weight": 0.05, "FEI_USD_mult": 0.6, "FEI_Poverty_mult": 1.0, "SS_Crime_mult": 0.3},
+        "Black": {"USD_weight": 0.55, "Poverty_weight": 0.55, "Crime_weight": 0.15, "Retreat_weight": 0.05, "FEI_USD_mult": 0.65, "FEI_Poverty_mult": 1.3, "SS_Crime_mult": 0.6},
+        "Brown": {"USD_weight": 0.5, "Poverty_weight": 0.5, "Crime_weight": 0.15, "Retreat_weight": 0.05, "FEI_USD_mult": 0.6, "FEI_Poverty_mult": 1.25, "SS_Crime_mult": 0.55},
+        "Children": {"USD_weight": 0.5, "Poverty_weight": 0.6, "Crime_weight": 0.05, "Retreat_weight": 0.03, "FEI_USD_mult": 0.6, "FEI_Poverty_mult": 1.4, "SS_Crime_mult": 0.3},
+        "Elderly": {"USD_weight": 0.5, "Poverty_weight": 0.55, "Crime_weight": 0.1, "Retreat_weight": 0.03, "FEI_USD_mult": 0.65, "FEI_Poverty_mult": 1.3, "SS_Crime_mult": 0.4},
+        "Women": {"USD_weight": 0.45, "Poverty_weight": 0.45, "Crime_weight": 0.2, "Retreat_weight": 0.05, "FEI_USD_mult": 0.55, "FEI_Poverty_mult": 1.1, "SS_Crime_mult": 0.6},
+        "LI_Black_Children": {"USD_weight": 0.6, "Poverty_weight": 0.65, "Crime_weight": 0.1, "Retreat_weight": 0.03, "FEI_USD_mult": 0.7, "FEI_Poverty_mult": 1.5, "SS_Crime_mult": 0.5},
+        "UR_Black_Women": {"USD_weight": 0.55, "Poverty_weight": 0.5, "Crime_weight": 0.35, "Retreat_weight": 0.1, "FEI_USD_mult": 0.6, "FEI_Poverty_mult": 1.2, "SS_Crime_mult": 0.8}
+    }
+
+    df_strata = df_base.copy()
+    for stratum, weights in strata_def.items():
+        df_strata[f"FEI_{stratum}"] = df_strata["USD_Decline"] * weights["FEI_USD_mult"] + df_strata["Poverty_Increase"] * weights["FEI_Poverty_mult"]
+        df_strata[f"SS_{stratum}"] = df_strata["Crime_Increase"] * weights["SS_Crime_mult"] + df_strata["Retreat_Probability"] * 0.4
+        df_strata[f"PSI_{stratum}"] = (df_strata["USD_Decline"] * weights["USD_weight"] +
+                                       df_strata["Poverty_Increase"] * weights["Poverty_weight"] +
+                                       df_strata["Crime_Increase"] * weights["Crime_weight"] +
+                                       df_strata["Retreat_Probability"] * weights["Retreat_weight"])
+    return df_strata
+
+# ==================== VECTORIZED INTERVENTION ENGINE ====================
+def apply_interventions_vectorized(df_strata, intervention_scenarios, strata_list):
+    """
+    Applies interventions and stochastic shocks using fully vectorized operations.
+    Returns a concatenated DataFrame of all scenarios.
+    """
+    print("Applying interventions and shocks (vectorized)...")
+    dfs = []
+    for int_name, params in intervention_scenarios.items():
+        df_temp = df_strata.copy()
+        df_temp['Intervention'] = int_name
+
+        # Vectorized intervention application
+        fei_reduction_factor = 1 - params['FEI_reduction']
+        ss_reduction_factor = 1 - params['SS_reduction']
+        psi_reduction_factor = 1 - params['PSI_reduction']
+
+        # Create masks for targeted strata
+        fei_target_mask = np.isin(strata_list, ["Low_Income", "Black", "Brown", "Children", "Elderly", "LI_Black_Children"])
+        ss_target_mask = np.isin(strata_list, ["Urban", "Black", "Brown", "Women", "UR_Black_Women"])
+        psi_target_mask = np.isin(strata_list, ["Black", "Brown", "LI_Black_Children"])
+
+        # Apply reductions using broadcasting
+        for i, stratum in enumerate(strata_list):
+            if fei_target_mask[i]:
+                df_temp[f'FEI_{stratum}'] *= fei_reduction_factor
+            if ss_target_mask[i]:
+                df_temp[f'SS_{stratum}'] *= ss_reduction_factor
+            if psi_target_mask[i]:
+                df_temp[f'PSI_{stratum}'] *= psi_reduction_factor
+
+        # Apply RCF boost
+        df_temp['RCF'] += params['RCF_boost']
+        df_temp['Retreat_Probability'] = np.clip(df_temp['Retreat_Probability'] + params['RCF_boost'] * 20, 0, 100)
+
+        # Vectorized stochastic shocks
+        np.random.seed(42)  # For reproducibility
+        shock_mask = np.random.random(len(df_temp)) < 0.05
+        shock_magnitude = np.random.uniform(1.1, 1.2, len(df_temp))
+
+        # Apply shocks to all strata at once using .loc and .filter
+        fei_cols = [col for col in df_temp.columns if col.startswith('FEI_')]
+        ss_cols = [col for col in df_temp.columns if col.startswith('SS_')]
+        psi_cols = [col for col in df_temp.columns if col.startswith('PSI_')]
+
+        df_temp.loc[shock_mask, fei_cols] = df_temp.loc[shock_mask, fei_cols].mul(shock_magnitude[shock_mask], axis=0)
+        df_temp.loc[shock_mask, ss_cols] = df_temp.loc[shock_mask, ss_cols].mul(shock_magnitude[shock_mask], axis=0)
+        df_temp.loc[shock_mask, psi_cols] = df_temp.loc[shock_mask, psi_cols].mul(shock_magnitude[shock_mask], axis=0)
+
+        dfs.append(df_temp)
+
+    return pd.concat(dfs, ignore_index=True)
+
+def apply_feedback_loop_vectorized(df):
+    """
+    Applies the feedback loop (high SS in one quarter increases PSI in the next)
+    using vectorized operations.
+    """
+    print("Applying feedback loop (vectorized)...")
+    # Create a shifted DataFrame to easily access next quarter's data
+    df_next = df.sort_values(['Scenario', 'Intervention', 'Iteration', 'Quarter']).groupby(['Scenario', 'Intervention', 'Iteration']).shift(-1)
+    psi_cols = [col for col in df.columns if col.startswith('PSI_')]
+
+    # Identify rows where average SS in vulnerable groups > 50
+    ss_vulnerable_cols = [f"SS_{s}" for s in ["Urban", "Black", "Brown", "Women", "UR_Black_Women"]]
+    high_ss_mask = df[ss_vulnerable_cols].mean(axis=1) > 50
+
+    # Apply the multiplier to the NEXT quarter's PSI where current SS is high
+    df.loc[df_next.index, psi_cols] = np.where(
+        high_ss_mask.values[:, None],
+        df_next[psi_cols] * 1.1,
+        df_next[psi_cols]
+    )
+    return df
+
+# ==================== METRIC CALCULATION & ANALYSIS ====================
+def calculate_system_metrics(df, strata_psi_vulnerable, strata_ss_vulnerable):
+    """Calculates CL, IE, and ECI metrics."""
+    print("Calculating system metrics (CL, IE, ECI)...")
+    df['CL'] = 1.0 - 0.5 * df[[f'PSI_{s}' for s in strata_psi_vulnerable]].mean(axis=1)
+    df['IE'] = 1.0 - 0.4 * df[[f'SS_{s}' for s in strata_ss_vulnerable]].mean(axis=1) - 0.3 * df['Retreat_Probability'] / 100
+    df['ECI'] = 0.5 * df['EP'] + 0.3 * df['CL'] + 0.2 * df['IE']
+    return df
+
+def create_summary_statistics(df_interventions, strata_psi_vulnerable, strata_ss_vulnerable):
+    """Creates summary statistics for the dashboard."""
+    print("Creating summary statistics...")
+    eci_summary = df_interventions.groupby(["Scenario", "Quarter", "Intervention"]).agg({
+        "ECI": ["mean", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)],
+        "CL": "mean", "IE": "mean",
+        **{f"PSI_{s}": ["mean", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)] for s in strata_psi_vulnerable},
+        **{f"SS_{s}": ["mean", lambda x: np.percentile(x, 10), lambda x: np.percentile(x, 90)] for s in strata_ss_vulnerable}
+    }).round(2)
+    eci_summary.columns = ['_'.join(col).strip('_') for col in eci_summary.columns]
+    return eci_summary.reset_index()
+
+# ==================== MAIN EXECUTION ====================
+start_time = time.time()
+
+# 1. Configuration
+intervention_scenarios = {
+    "Baseline": {"FEI_reduction": 0.0, "SS_reduction": 0.0, "RCF_boost": 0.0, "PSI_reduction": 0.0},
+    "Moderate": {"FEI_reduction": 0.1, "SS_reduction": 0.1, "RCF_boost": 0.1, "PSI_reduction": 0.05},
+    "Aggressive": {"FEI_reduction": 0.15, "SS_reduction": 0.15, "RCF_boost": 0.2, "PSI_reduction": 0.15}
+}
+strata_list = list(strata.keys())
+strata_psi_vulnerable = ["Low_Income", "Black", "Brown", "Children", "Elderly", "LI_Black_Children"]
+strata_ss_vulnerable = ["Urban", "Black", "Brown", "Women", "UR_Black_Women"]
+
+# 2. Generate or load base data
+try:
+    df_strata  # Check if it exists
+except NameError:
+    df_strata = generate_base_data()
+
+# 3. Apply interventions and feedback
+df_interventions = apply_interventions_vectorized(df_strata, intervention_scenarios, strata_list)
+df_interventions = apply_feedback_loop_vectorized(df_interventions)
+df_interventions = calculate_system_metrics(df_interventions, strata_psi_vulnerable, strata_ss_vulnerable)
+
+# 4. Create summary
+eci_summary = create_summary_statistics(df_interventions, strata_psi_vulnerable, strata_ss_vulnerable)
+
+print(f"Total execution time: {time.time() - start_time:.2f} seconds")
+
+# ==================== INTERACTIVE DASHBOARD ====================
+print("Generating interactive dashboard...")
+# This would be the next step: building a Plotly dashboard with dropdowns
+# for Scenario and Intervention, plotting ECI, PSI, SS for selected groups.
+# The code would be similar but more manageable as it would only plot traces for the selected scenario.
