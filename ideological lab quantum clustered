@@ -1,0 +1,442 @@
+# Copyright 2025 Logan Royce Lorentz
+# ideological_lab_quantum_clustered.py - Dashboard with Clustering, Edge Labels, and Interactivity
+
+from pyvis.network import Network
+import json
+import networkx as nx
+from matplotlib.colors import Normalize
+import numpy as np
+import community as community_louvain  # python-louvain for clustering
+
+# Load simulation data
+with open("hitl_quantum_edges_simulation.json", "r") as f:
+    animation_data = json.load(f)
+with open("fide_quantum_edges_report.json", "r") as f:
+    fide_report = json.load(f)
+with open("conspiracy_edges.json", "r") as f:
+    flows = json.load(f)["edges"]
+
+# Define node type hierarchy
+node_types = {
+    "Role": {
+        "Propagator": ["Loose_Change_9_11", "Media", "Social_Media", "Camouflaged_Agent"],
+        "Critic": ["Academic_Critique", "Independent_Investigators", "Global_Critics"],
+        "Influencer": ["Entity", "Mossad", "Camouflaged_Agent"]
+    },
+    "Source Type": {
+        "Bot": ["Camouflaged_Agent"],
+        "Media": ["Media", "Social_Media"],
+        "Academic": ["Academic_Critique"],
+        "Public": ["Public_Perception", "Independent_Investigators"],
+        "Entity": ["Entity", "Mossad", "Global_Critics"]
+    },
+    "Credibility Level": {
+        "High": lambda attrs: attrs["trust"] > 0.7,
+        "Medium": lambda attrs: 0.3 <= attrs["trust"] <= 0.7,
+        "Low": lambda attrs: attrs["trust"] < 0.3
+    }
+}
+
+# Compute clusters using Louvain algorithm
+G = nx.DiGraph()
+G.add_nodes_from(animation_data[-1]["nodes"].keys())
+G.add_edges_from([(src, tgt) for src, tgt, _ in flows])
+partition = community_louvain.best_partition(G.to_undirected(), resolution=1.0)
+cluster_map = {node: f"Cluster_{part}" for node, part in partition.items()}
+unique_clusters = list(set(partition.values()))
+
+# Initialize PyVis network
+net = Network(height="800px", width="100%", directed=True, notebook=False)
+
+# Normalize for visualization
+norm_influence = Normalize(vmin=0, vmax=1)
+norm_fragility = Normalize(vmin=0, vmax=1)
+norm_weight = Normalize(vmin=0, vmax=1)
+norm_flow = Normalize(vmin=0, vmax=1)
+norm_sentiment = Normalize(vmin=0, vmax=1)
+norm_drift = Normalize(vmin=0, vmax=1)
+norm_speed = Normalize(vmin=-1, vmax=1)
+
+# Color map for clusters
+cluster_colors = plt.cm.tab10(np.linspace(0, 1, len(unique_clusters)))
+
+# Add nodes
+final_iteration = animation_data[-1]["nodes"]
+for node, attrs in final_iteration.items():
+    fragility = attrs["influence"] - attrs["trust"]
+    cluster_idx = partition[node]
+    color = "#800080" if node == "Camouflaged_Agent" else "#{:02x}{:02x}{:02x}".format(
+        int(cluster_colors[cluster_idx][0]*255),
+        int(cluster_colors[cluster_idx][1]*255),
+        int(cluster_colors[cluster_idx][2]*255)
+    )
+    net.add_node(
+        node,
+        label=node,
+        size=10 + 40 * norm_influence(attrs["influence"]),
+        color=color,
+        title=f"Influence: {attrs['influence']:.2f}, Trust: {attrs['trust']:.2f}, Reach: {attrs['reach']:.2f}, Sentiment: {attrs['sentiment']:.2f}, Fragility: {fragility:.2f}, Cluster: {cluster_map[node]}"
+    )
+
+# Add edges
+for edge in flows:
+    edge_type = edge[2]["type"]
+    color = "#0000FF" if edge_type in ["Conspiracy_Propagation", "Covert_Propagation"] else "#00FF00" if edge_type == "Scrutiny" else "#808080"
+    net.add_edge(
+        edge[0],
+        edge[1],
+        value=1 + 4 * norm_weight(edge[2]["weight"]),
+        color=color,
+        title=f"{edge_type} (Weight: {edge[2]['weight']:.2f})",
+        label=edge_type
+    )
+
+# Generate loop activity for edge coloring
+r4_activity = []
+b5_activity = []
+for snapshot in animation_data:
+    r4_count = sum(1 for node in ["Loose_Change_9_11", "Media", "Social_Media", "Camouflaged_Agent"] if snapshot["nodes"][node]["reach"] > 0.5)
+    b5_count = sum(1 for node in ["Academic_Critique", "Independent_Investigators"] if snapshot["nodes"][node]["influence"] > 0.4)
+    r4_activity.append(min(r4_count / 4, 1.0))
+    b5_activity.append(min(b5_count / 2, 1.0))
+
+# Format data
+nodes_json = {node: {"id": node, "label": node, "cluster": cluster_map[node]} for node in final_iteration}
+edges_json = []
+for snapshot in animation_data:
+    for (src, tgt), attrs in snapshot["edges"].items():
+        color = f"rgba({255*norm_sentiment(attrs['sentiment_impact'])}, {255*(1-norm_sentiment(attrs['sentiment_impact']))}, 0, {r4_activity[snapshot['iteration']] if attrs['type'] in ['Conspiracy_Propagation', 'Covert_Propagation'] else b5_activity[snapshot['iteration']] if attrs['type'] == 'Scrutiny' else 1})"
+        edges_json.append({
+            "from": src,
+            "to": tgt,
+            "value": attrs["weight"],
+            "title": f"{attrs['type']} (Weight: {attrs['weight']:.2f}, Influence Flow: {attrs['influence_flow']:.2f}, Sentiment Impact: {attrs['sentiment_impact']:.2f}, Drift Contribution: {attrs['drift_contribution']:.2f}, Propagation Speed: {attrs['propagation_speed']:.2f})",
+            "color": color,
+            "dashes": attrs["drift_contribution"] > 0.5,
+            "label": f"{attrs['type']} (Flow: {attrs['influence_flow']:.2f})"
+        })
+options_json = {
+    "nodes": {"font": {"size": 12}, "physics": True},
+    "edges": {
+        "arrows": {"to": {"enabled": True}},
+        "smooth": {"enabled": True, "type": "continuous"},
+        "font": {"size": 10, "align": "middle"},
+        "color": {"inherit": False}
+    },
+    "physics": {"enabled": True, "barnesHut": {"gravitationalConstant": -8000, "springLength": 100}},
+    "interaction": {"hover": True, "tooltipDelay": 200, "selectable": True, "dragNodes": True, "dragView": True, "zoomView": True}
+}
+
+# Generate HTML dashboard
+html_template = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Ideological Lab: Quantum AI HITL with Clustering</title>
+    <script type="text/javascript" src="https://unpkg.com/vis-network@9.1.2/dist/vis-network.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/vis-network@9.1.2/dist/dist/vis-network.min.css" />
+    <style>
+        body { font-family: Arial; }
+        #mynetwork { width: 65%; height: 800px; float: left; border: 1px solid black; }
+        #sidebar { width: 33%; float: right; padding: 10px; }
+        #slider, #node-type, #node-subtype, #edge-filter, #cluster-filter, #scenario { width: 100%; margin-top: 10px; }
+        #fide-report { margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div id="mynetwork"></div>
+    <div id="sidebar">
+        <h3>Ideological Lab Controls</h3>
+        <label for="iteration">Iteration:</label>
+        <input type="range" id="slider" min="0" max="{max_iter}" value="0">
+        <label for="scenario">Scenario:</label>
+        <select id="scenario">
+            <option value="0.4">Trust Drop 0.4 (Q-score=0.9)</option>
+            <option value="0.2">Trust Drop 0.2 (Q-score=0.85)</option>
+        </select>
+        <label for="node-type">Node Type:</label>
+        <select id="node-type">
+            <option value="all">All Nodes</option>
+            <option value="Role">Role</option>
+            <option value="Source Type">Source Type</option>
+            <option value="Credibility Level">Credibility Level</option>
+        </select>
+        <label for="node-subtype">Node Subtype:</label>
+        <select id="node-subtype">
+            <option value="all">All Subtypes</option>
+        </select>
+        <label for="cluster-filter">Cluster:</label>
+        <select id="cluster-filter">
+            <option value="all">All Clusters</option>
+            {cluster_options}
+        </select>
+        <label for="edge-filter">Edge Filter:</label>
+        <select id="edge-filter">
+            <option value="all">All Edges</option>
+            <option value="Conspiracy_Propagation">Conspiracy Propagation</option>
+            <option value="Scrutiny">Scrutiny</option>
+            <option value="high_weight">High Weight (>0.7)</option>
+            <option value="high_influence_flow">High Influence Flow (>0.5)</option>
+            <option value="high_drift_contribution">High Drift Contribution (>0.5)</option>
+        </select>
+        <div id="fide-report">
+            <h4>FIDE Quantum HITL Report</h4>
+            <h5>Key Metrics</h5>
+            <pre>Collapse Efficiency: {collapse_efficiency} iterations\nAgent Exposure: {agent_exposure} iterations\nDrift Recovery: {drift_recovery} iterations\nNetwork Stability: {network_stability:.2f}\nIntervention Cost: {intervention_cost:.2f}</pre>
+            <h5>Brittle Nodes</h5>
+            <pre>{brittle_nodes}</pre>
+            <h5>Shock Impacts</h5>
+            <pre>{shock_impacts}</pre>
+            <h5>Loop Activity</h5>
+            <pre>{loop_activity}</pre>
+            <h5>HITL Feedback</h5>
+            <pre>{hitl_feedback}</pre>
+            <h5>Quantum Feedback</h5>
+            <pre>{quantum_feedback}</pre>
+            <h5>Drift Severity</h5>
+            <pre>{drift_severity}</pre>
+            <h5>Feature Importance</h5>
+            <pre>{feature_importance}</pre>
+        </div>
+    </div>
+    <script>
+        var nodes = {nodes};
+        var edges = {edges};
+        var animationData = {animation_data};
+        var nodeTypes = {node_types};
+        var clusterMap = {cluster_map};
+        var container = document.getElementById('mynetwork');
+        var data = {{ nodes: new vis.DataSet([]), edges: new vis.DataSet([]) }};
+        var options = {options};
+        var network = new vis.Network(container, data, options);
+        
+        function updateNodeSubtypes(nodeType) {{
+            var subtypeSelect = document.getElementById('node-subtype');
+            subtypeSelect.innerHTML = '<option value="all">All Subtypes</option>';
+            if (nodeType !== 'all') {{
+                Object.keys(nodeTypes[nodeType]).forEach(function(subtype) {{
+                    var option = document.createElement('option');
+                    option.value = subtype;
+                    option.text = subtype;
+                    subtypeSelect.appendChild(option);
+                }});
+            }}
+        }}
+        
+        function updateNetwork(iteration, trust_drop, node_type, node_subtype, edge_filter, cluster_filter) {{
+            var snapshot = animationData[iteration];
+            data.nodes.clear();
+            data.edges.clear();
+            Object.keys(snapshot.nodes).forEach(function(node) {{
+                var attrs = snapshot.nodes[node];
+                var fragility = attrs.influence - attrs.trust;
+                var cluster_idx = Object.values(clusterMap).indexOf(clusterMap[node]);
+                var color = node === 'Camouflaged_Agent' ? '#800080' : `hsl(${cluster_idx * 360 / {num_clusters}, 70%, 50%)`;
+                var size = 10 + 40 * attrs.influence;
+                var opacity = 0.3;
+                var isSelected = false;
+                if ((node_type === 'all' || 
+                    (node_type === 'Role' && node_subtype !== 'all' && nodeTypes[node_type][node_subtype].includes(node)) ||
+                    (node_type === 'Source Type' && node_subtype !== 'all' && nodeTypes[node_type][node_subtype].includes(node)) ||
+                    (node_type === 'Credibility Level' && node_subtype !== 'all' && nodeTypes[node_type][node_subtype](attrs))) &&
+                    (cluster_filter === 'all' || clusterMap[node] === cluster_filter)) {{
+                    opacity = 1.0;
+                    isSelected = true;
+                    if (snapshot.shocks.some(s => s[2] === node && s[1] === 'HITL_Detection')) {{
+                        size *= 1.5;
+                        color = '#FF0000';
+                    }} else if (snapshot.quantum_feedback.some(f => f[0] === 'Quantum_Drift_Alert' && f[1] === node)) {{
+                        color = '#FFA500';
+                    }}
+                }}
+                data.nodes.add({{
+                    id: node,
+                    label: node,
+                    size: size,
+                    color: color,
+                    opacity: opacity,
+                    title: `Influence: ${attrs.influence.toFixed(2)}, Trust: ${attrs.trust.toFixed(2)}, Reach: ${attrs.reach.toFixed(2)}, Sentiment: ${attrs.sentiment.toFixed(2)}, Fragility: ${fragility.toFixed(2)}, Cluster: ${clusterMap[node]}`
+                }});
+            }});
+            Object.keys(snapshot.edges).forEach(function(edgeKey) {{
+                var edge = snapshot.edges[edgeKey];
+                var opacity = 0.3;
+                var color = edge.type.includes('Conspiracy_Propagation') || edge.type.includes('Covert_Propagation') ? `rgba(${255*edge.sentiment_impact}, ${255*(1-edge.sentiment_impact)}, 0, ${r4_activity[iteration]})` : 
+                            edge.type.includes('Scrutiny') ? `rgba(0, ${255*edge.sentiment_impact}, 0, ${b5_activity[iteration]})` : `rgba(128, 128, 128, 1)`;
+                var dashes = edge.drift_contribution > 0.5;
+                var value = 1 + 4 * edge.influence_flow;
+                var label = edge_filter !== 'all' ? `${edge.type} (Flow: ${edge.influence_flow.toFixed(2)})` : '';
+                if (edge_filter === 'all' ||
+                    (edge_filter === 'Conspiracy_Propagation' && (edge.type.includes('Conspiracy_Propagation') || edge.type.includes('Covert_Propagation'))) ||
+                    (edge_filter === 'Scrutiny' && edge.type.includes('Scrutiny')) ||
+                    (edge_filter === 'high_weight' && edge.weight > 0.7) ||
+                    (edge_filter === 'high_influence_flow' && edge.influence_flow > 0.5) ||
+                    (edge_filter === 'high_drift_contribution' && edge.drift_contribution > 0.5)) {{
+                    opacity = 1.0;
+                }}
+                data.edges.add({{
+                    id: edgeKey,
+                    from: edgeKey.split(',')[0].replace('(', '').trim(),
+                    to: edgeKey.split(',')[1].replace(')', '').trim(),
+                    value: value,
+                    color: {{ color: color, opacity: opacity }},
+                    dashes: dashes,
+                    label: label,
+                    title: `${edge.type} (Weight: ${edge.weight.toFixed(2)}, Influence Flow: ${edge.influence_flow.toFixed(2)}, Sentiment Impact: ${edge.sentiment_impact.toFixed(2)}, Drift Contribution: ${edge.drift_contribution.toFixed(2)}, Propagation Speed: ${edge.propagation_speed.toFixed(2)})`
+                }});
+            }});
+            network.on("click", function(params) {{
+                if (params.edges.length > 0) {{
+                    var edgeId = params.edges[0];
+                    var edge = data.edges.get(edgeId);
+                    network.selectNodes([edge.from, edge.to]);
+                    network.fit({{ nodes: [edge.from, edge.to], animation: true }});
+                }}
+            }});
+            var shocks = snapshot.shocks.map(s => s[1] + ' (' + s[2] + ')').join(', ');
+            var hitl_feedback = snapshot.hitl_feedback.map(f => f[0] + ': ' + f[1] + ' (' + f[2] + ')').join('\\n');
+            var quantum_feedback = snapshot.quantum_feedback.map(f => f[0] + ': ' + f[1] + ' (' + f[2] + ')').join('\\n');
+            var filtered_metrics = {};
+            var filtered_edge_metrics = {};
+            if (node_type !== 'all' && node_subtype !== 'all') {{
+                var filtered_nodes = Object.keys(snapshot.nodes).filter(n => 
+                    (node_type === 'Role' && nodeTypes[node_type][node_subtype].includes(n)) ||
+                    (node_type === 'Source Type' && nodeTypes[node_type][node_subtype].includes(n)) ||
+                    (node_type === 'Credibility Level' && nodeTypes[node_type][node_subtype](snapshot.nodes[n]))
+                ).filter(n => cluster_filter === 'all' || clusterMap[n] === cluster_filter);
+                filtered_metrics = {{
+                    avg_influence: filtered_nodes.length ? filtered_nodes.reduce((sum, n) => sum + snapshot.nodes[n].influence, 0) / filtered_nodes.length : 0,
+                    avg_trust: filtered_nodes.length ? filtered_nodes.reduce((sum, n) => sum + snapshot.nodes[n].trust, 0) / filtered_nodes.length : 0,
+                    avg_reach: filtered_nodes.length ? filtered_nodes.reduce((sum, n) => sum + snapshot.nodes[n].reach, 0) / filtered_nodes.length : 0,
+                    avg_sentiment: filtered_nodes.length ? filtered_nodes.reduce((sum, n) => sum + snapshot.nodes[n].sentiment, 0) / filtered_nodes.length : 0
+                }};
+            }}
+            if (edge_filter !== 'all') {{
+                var filtered_edges = Object.keys(snapshot.edges).filter(e => 
+                    (edge_filter === 'Conspiracy_Propagation' && (snapshot.edges[e].type.includes('Conspiracy_Propagation') || snapshot.edges[e].type.includes('Covert_Propagation'))) ||
+                    (edge_filter === 'Scrutiny' && snapshot.edges[e].type.includes('Scrutiny')) ||
+                    (edge_filter === 'high_weight' && snapshot.edges[e].weight > 0.7) ||
+                    (edge_filter === 'high_influence_flow' && snapshot.edges[e].influence_flow > 0.5) ||
+                    (edge_filter === 'high_drift_contribution' && snapshot.edges[e].drift_contribution > 0.5)
+                );
+                filtered_edge_metrics = {{
+                    avg_influence_flow: filtered_edges.length ? filtered_edges.reduce((sum, e) => sum + snapshot.edges[e].influence_flow, 0) / filtered_edges.length : 0,
+                    avg_sentiment_impact: filtered_edges.length ? filtered_edges.reduce((sum, e) => sum + snapshot.edges[e].sentiment_impact, 0) / filtered_edges.length : 0,
+                    avg_drift_contribution: filtered_edges.length ? filtered_edges.reduce((sum, e) => sum + snapshot.edges[e].drift_contribution, 0) / filtered_edges.length : 0,
+                    avg_propagation_speed: filtered_edges.length ? filtered_edges.reduce((sum, e) => sum + snapshot.edges[e].propagation_speed, 0) / filtered_edges.length : 0
+                }};
+            }}
+            document.getElementById('fide-report').innerHTML = `
+                <h4>FIDE Quantum HITL Report (Iteration ${iteration})</h4>
+                <h5>Key Metrics</h5>
+                <pre>Collapse Efficiency: ${fide_report.collapse_efficiency} iterations\nAgent Exposure: ${fide_report.agent_exposure} iterations\nDrift Recovery: ${fide_report.drift_recovery} iterations\nNetwork Stability: ${fide_report.network_stability.toFixed(2)}\nIntervention Cost: ${fide_report.intervention_cost.toFixed(2)}</pre>
+                ${node_type !== 'all' && node_subtype !== 'all' ? `
+                <h5>Filtered Node Metrics (${node_type}: ${node_subtype}${cluster_filter !== 'all' ? `, Cluster: ${cluster_filter}` : ''})</h5>
+                <pre>Avg Influence: ${filtered_metrics.avg_influence?.toFixed(2) || 'N/A'}\nAvg Trust: ${filtered_metrics.avg_trust?.toFixed(2) || 'N/A'}\nAvg Reach: ${filtered_metrics.avg_reach?.toFixed(2) || 'N/A'}\nAvg Sentiment: ${filtered_metrics.avg_sentiment?.toFixed(2) || 'N/A'}</pre>
+                ` : ''}
+                ${edge_filter !== 'all' ? `
+                <h5>Filtered Edge Metrics (${edge_filter})</h5>
+                <pre>Avg Influence Flow: ${filtered_edge_metrics.avg_influence_flow?.toFixed(2) || 'N/A'}\nAvg Sentiment Impact: ${filtered_edge_metrics.avg_sentiment_impact?.toFixed(2) || 'N/A'}\nAvg Drift Contribution: ${filtered_edge_metrics.avg_drift_contribution?.toFixed(2) || 'N/A'}\nAvg Propagation Speed: ${filtered_edge_metrics.avg_propagation_speed?.toFixed(2) || 'N/A'}</pre>
+                ` : ''}
+                <h5>Brittle Nodes</h5><pre>${JSON.stringify(fide_report.brittle_nodes, null, 2)}</pre>
+                <h5>Shock Impacts</h5><pre>${shocks || 'None'}</pre>
+                <h5>Loop Activity</h5><pre>${JSON.stringify(fide_report.loop_activity, null, 2)}</pre>
+                <h5>HITL Feedback</h5><pre>${hitl_feedback || 'None'}</pre>
+                <h5>Quantum Feedback</h5><pre>${quantum_feedback || 'None'}</pre>
+                <h5>Drift Severity</h5><pre>${snapshot.drift_severity.toFixed(2)}</pre>
+                <h5>Feature Importance</h5><pre>${JSON.stringify(fide_report.feature_importance, null, 2)}</pre>
+            `;
+        }}
+        
+        document.getElementById('slider').addEventListener('input', function(e) {{
+            var trust_drop = document.getElementById('scenario').value;
+            var node_type = document.getElementById('node-type').value;
+            var node_subtype = document.getElementById('node-subtype').value;
+            var edge_filter = document.getElementById('edge-filter').value;
+            var cluster_filter = document.getElementById('cluster-filter').value;
+            updateNetwork(parseInt(e.target.value), trust_drop, node_type, node_subtype, edge_filter, cluster_filter);
+        }});
+        
+        document.getElementById('scenario').addEventListener('change', function(e) {{
+            var trust_drop = e.target.value;
+            var node_type = document.getElementById('node-type').value;
+            var node_subtype = document.getElementById('node-subtype').value;
+            var edge_filter = document.getElementById('edge-filter').value;
+            var cluster_filter = document.getElementById('cluster-filter').value;
+            updateNetwork(parseInt(document.getElementById('slider').value), trust_drop, node_type, node_subtype, edge_filter, cluster_filter);
+        }});
+        
+        document.getElementById('node-type').addEventListener('change', function(e) {{
+            var node_type = e.target.value;
+            updateNodeSubtypes(node_type);
+            var node_subtype = document.getElementById('node-subtype').value;
+            var trust_drop = document.getElementById('scenario').value;
+            var edge_filter = document.getElementById('edge-filter').value;
+            var cluster_filter = document.getElementById('cluster-filter').value;
+            updateNetwork(parseInt(document.getElementById('slider').value), trust_drop, node_type, node_subtype, edge_filter, cluster_filter);
+        }});
+        
+        document.getElementById('node-subtype').addEventListener('change', function(e) {{
+            var node_type = document.getElementById('node-type').value;
+            var node_subtype = e.target.value;
+            var trust_drop = document.getElementById('scenario').value;
+            var edge_filter = document.getElementById('edge-filter').value;
+            var cluster_filter = document.getElementById('cluster-filter').value;
+            updateNetwork(parseInt(document.getElementById('slider').value), trust_drop, node_type, node_subtype, edge_filter, cluster_filter);
+        }});
+        
+        document.getElementById('edge-filter').addEventListener('change', function(e) {{
+            var trust_drop = document.getElementById('scenario').value;
+            var node_type = document.getElementById('node-type').value;
+            var node_subtype = document.getElementById('node-subtype').value;
+            var edge_filter = e.target.value;
+            var cluster_filter = document.getElementById('cluster-filter').value;
+            updateNetwork(parseInt(document.getElementById('slider').value), trust_drop, node_type, node_subtype, edge_filter, cluster_filter);
+        }});
+        
+        document.getElementById('cluster-filter').addEventListener('change', function(e) {{
+            var trust_drop = document.getElementById('scenario').value;
+            var node_type = document.getElementById('node-type').value;
+            var node_subtype = document.getElementById('node-subtype').value;
+            var edge_filter = document.getElementById('edge-filter').value;
+            var cluster_filter = e.target.value;
+            updateNetwork(parseInt(document.getElementById('slider').value), trust_drop, node_type, node_subtype, edge_filter, cluster_filter);
+        }});
+        
+        updateNodeSubtypes('all');
+        updateNetwork(0, 0.4, 'all', 'all', 'all', 'all');
+    </script>
+</body>
+</html>
+"""
+
+# Generate cluster options for HTML
+cluster_options = "".join(f'<option value="Cluster_{i}">Cluster {i}</option>' for i in unique_clusters)
+
+# Write HTML
+with open("ideological_lab_quantum_clustered.html", "w") as f:
+    f.write(html_template.format(
+        max_iter=len(animation_data)-1,
+        collapse_efficiency=fide_report["collapse_efficiency"],
+        agent_exposure=fide_report["agent_exposure"],
+        drift_recovery=fide_report["drift_recovery"],
+        network_stability=fide_report["network_stability"],
+        intervention_cost=fide_report["intervention_cost"],
+        brittle_nodes=json.dumps(fide_report["brittle_nodes"], indent=2),
+        shock_impacts=json.dumps(fide_report["shock_impacts"], indent=2),
+        loop_activity=json.dumps(fide_report["loop_activity"], indent=2),
+        hitl_feedback=json.dumps(animation_data[0]["hitl_feedback"], indent=2),
+        quantum_feedback=json.dumps(animation_data[0]["quantum_feedback"], indent=2),
+        drift_severity=animation_data[0]["drift_severity"],
+        feature_importance=json.dumps(fide_report["feature_importance"], indent=2),
+        nodes=json.dumps(nodes_json),
+        edges=json.dumps(edges_json),
+        animation_data=json.dumps(animation_data),
+        options=json.dumps(options_json),
+        node_types=json.dumps({k: {sk: v for sk, v in sv.items()} if k != "Credibility Level" else {} for k, sv in node_types.items()}),
+        cluster_map=json.dumps(cluster_map),
+        cluster_options=cluster_options,
+        r4_activity=json.dumps(r4_activity),
+        b5_activity=json.dumps(b5_activity),
+        num_clusters=len(unique_clusters)
+    ))
