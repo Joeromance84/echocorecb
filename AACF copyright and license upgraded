@@ -1,0 +1,292 @@
+# generate_full_ingestion_spec_pdf.py
+# Copyright 2025 Logan Royce Lorentz
+# AACF v1.0
+
+import subprocess
+import os
+from datetime import datetime
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak, Preformatted
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import inch, mm
+from reportlab.lib import colors
+from reportlab.platypus import PageTemplate, Frame
+import plotly.graph_objects as go
+try:
+    from PyPDF2 import PdfReader, PdfWriter
+except ImportError:
+    PdfReader, PdfWriter = None, None
+try:
+    from mermaid2png import mermaid2png
+except ImportError:
+    mermaid2png = None
+
+# ---------- 1. Generate Sankey Diagram ----------
+try:
+    fig = go.Figure(data=[go.Sankey(
+        node=dict(
+            pad=15, thickness=20,
+            line=dict(color="black", width=0.5),
+            label=["Sources (Africa/Global South)", "Scraper (Scrapy/Tweepy)", "Normalize (spaCy)",
+                   "Fact-Check (BERT)", "Database (PostgreSQL)", "Community Review", "AI Gatekeeper"],
+            color=["blue", "orange", "green", "red", "purple", "gray", "cyan"],
+            customdata=[
+                "AllAfrica, DOJ UCR, World Bank", "Extract crime/infrastructure", "Convert to JSON",
+                "Cross-reference IMF/NGOS", "Store PSI/ECI/crime", "60601 panel veto", "Ethical red lines"
+            ],
+            hovertemplate="%{customdata}<extra></extra>"
+        ),
+        link=dict(
+            source=[0, 0, 1, 2, 3, 4, 5],
+            target=[1, 2, 3, 4, 5, 6, 6],
+            value=[50, 30, 30, 30, 20, 20, 20]
+        )
+    )])
+    fig.write_image("ingestion_sankey.png")
+except Exception as e:
+    print(f"Error generating Sankey diagram: {e}. Using fallback image if available.")
+
+# ---------- 2. Generate Mermaid Diagram ----------
+mermaid_text = """
+graph TD
+    A[Sources: AllAfrica, DOJ, World Bank] --> B[Scraper/API Extraction]
+    B --> C{Normalization & Fact-Check}
+    C --> D[Provenance DB]
+    D --> E{Community Review Panel}
+    E -->|Approve| F[AI Gatekeeper: Tupac/Bayesian]
+    E -->|Reject| G[Reject Data]
+    F -->|Ethical| H[Normalized Data Store]
+    F -->|Unethical| G
+"""
+try:
+    with open("ingestion_flow.mmd", "w") as f:
+        f.write(mermaid_text)
+    if os.path.exists("/usr/bin/mmdc"):
+        subprocess.run(["mmdc", "-i", "ingestion_flow.mmd", "-o", "ingestion_flow_mermaid.png"])
+    elif mermaid2png:
+        mermaid2png(mermaid_text, output="ingestion_flow_mermaid.png")
+    else:
+        print("Warning: Mermaid CLI or mermaid2png not available. Skipping Mermaid diagram.")
+except Exception as e:
+    print(f"Error generating Mermaid diagram: {e}")
+
+# ---------- 3. Create PDF ----------
+pdf_file = "data_ingestion_spec_full.pdf"
+doc = SimpleDocTemplate(pdf_file, pagesize=letter)
+styles = getSampleStyleSheet()
+
+# Page Template with Header/Footer and Page Numbers
+def add_page_decorations(canvas, doc):
+    canvas.saveState()
+    canvas.setFont('Helvetica', 9)
+    canvas.drawString(30*mm, 15*mm, f"Copyright 2025 Logan Royce Lorentz | AACF v1.0")
+    canvas.drawRightString(180*mm, 15*mm, f"Page {doc.page}")
+    canvas.restoreState()
+
+frame = Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id='normal')
+doc.addPageTemplates([PageTemplate(id='First', frames=frame, onPage=add_page_decorations)])
+
+story = []
+
+# --- Title Page ---
+story.append(Paragraph("Data Ingestion & Source Vetting Specification", styles['Title']))
+story.append(Spacer(1, 0.2*inch))
+story.append(Paragraph(f"Copyright 2025 Logan Royce Lorentz | AACF v1.0 | Generated: {datetime.now().strftime('%Y-%m-%d')}", styles['Normal']))
+story.append(PageBreak())
+
+# --- Section 1: Overview ---
+story.append(Paragraph("1. Overview & Purpose", styles['Heading1']))
+overview_text = """
+This module prioritizes African/Global South data sources, race-based crime data (DOJ UCR), and infrastructure metrics 
+(healthcare, education, energy, internet) to ensure equitable PSI (50-60%), ECI (0.2), and RCF (>0.8). It embeds community 
+consent (60601 panels, 50% Black/Latino), ethical red lines (no dehumanization), and Bayesian confidence scoring for accuracy. 
+The system counters elite narratives (dollar hegemony, hypergamy) and aligns with Tupac’s call for justice.
+"""
+story.append(Paragraph(overview_text, styles['Normal']))
+story.append(PageBreak())
+
+# --- Section 2: Sankey Diagram ---
+story.append(Paragraph("2. ETL Ingestion Flow (Sankey Diagram)", styles['Heading1']))
+if os.path.exists("ingestion_sankey.png"):
+    story.append(Image("ingestion_sankey.png", width=5.5*inch, height=3.5*inch))
+story.append(PageBreak())
+
+# --- Section 3: Mermaid Diagram ---
+story.append(Paragraph("3. ETL Ingestion Flow (Mermaid Diagram)", styles['Heading1']))
+if os.path.exists("ingestion_flow_mermaid.png"):
+    story.append(Image("ingestion_flow_mermaid.png", width=5.5*inch, height=3.5*inch))
+story.append(PageBreak())
+
+# --- Section 4: Canonical Source List ---
+story.append(Paragraph("4. Canonical Source List", styles['Heading1']))
+sources = [
+    ["Category", "Sources", "Priority", "Confidence Weight"],
+    ["Primary", "AllAfrica, BRICS Post, DOJ UCR", "50%", "0.9"],
+    ["Secondary", "World Bank, UN OCHA, IMF", "30%", "0.8"],
+    ["Tertiary", "X Posts (60601), NGOs", "20%", "0.7"]
+]
+table = Table(sources, colWidths=[1.5*inch, 3.5*inch, 1*inch, 1*inch])
+table.setStyle(TableStyle([
+    ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+    ('GRID', (0, 0), (-1, -1), 0.5, colors.black)
+]))
+story.append(table)
+story.append(PageBreak())
+
+# --- Section 5: ETL Pipelines Pseudocode ---
+story.append(Paragraph("5. ETL Pipelines", styles['Heading1']))
+etl_code = """
+# DOJ Crime Spider with Hypergamy Tagging
+import scrapy
+class DOJSpider(scrapy.Spider):
+    name = "doj_ucr"
+    start_urls = ["https://ucr.fbi.gov/crime-data"]
+    def parse(self, response):
+        for record in response.css("table.crime-stats"):
+            yield {
+                "metric": "crime_rate",
+                "race": record.css("td.race::text").get(),
+                "value": float(record.css("td.value::text").get()),
+                "hypergamy_tag": "status-driven" if "status" in record.text else "neutral",
+                "metadata": {"source": "doj_ucr", "date": "2025-08-30", "copyright": "Copyright 2025 Logan Royce Lorentz"}
+            }
+# Infrastructure Normalization
+import spacy
+nlp = spacy.load("en_core_web_sm")
+def normalize_infrastructure(raw_data):
+    doc = nlp(raw_data["content"])
+    metric_type = "hospital_beds" if "hospital" in doc.text else "internet_access"
+    return {
+        "metric_type": metric_type,
+        "value": extract_value(doc),
+        "confidence_score": raw_data["confidence"],
+        "tupac_weight": 0.8 if "community" in doc.text else 0.5
+    }
+"""
+story.append(Preformatted(etl_code, styles['Code']))
+story.append(PageBreak())
+
+# --- Section 6: Database Schema ---
+story.append(Paragraph("6. Database Schema", styles['Heading1']))
+db_schema = """
+CREATE TABLE raw_data (
+    id UUID PRIMARY KEY,
+    source_id VARCHAR(50),
+    content JSONB,
+    scraped_at TIMESTAMP,
+    confidence_score FLOAT CHECK (confidence_score >= 0 AND confidence_score <= 1),
+    metric_category VARCHAR(50),
+    copyright VARCHAR(100) DEFAULT 'Copyright 2025 Logan Royce Lorentz'
+);
+CREATE TABLE normalized_data (
+    id UUID PRIMARY KEY,
+    raw_id UUID REFERENCES raw_data(id),
+    metric_type VARCHAR(20),
+    value FLOAT,
+    confidence_score FLOAT,
+    community_approved BOOLEAN,
+    tupac_weight FLOAT,
+    bayesian_posterior FLOAT
+);
+"""
+story.append(Preformatted(db_schema, styles['Code']))
+story.append(PageBreak())
+
+# --- Section 7: Ethical Red Lines & Gatekeeper ---
+story.append(Paragraph("7. Community Consent & Ethical Red Lines", styles['Heading1']))
+ethics_text = """
+Community panels (5–7 members, 50% Black/Latino, 60601-based) veto sources with 60% vote. Ethical red lines:
+- No dehumanizing/racialized crime data or destabilizing infrastructure reports.
+- Tupac heuristic: Prioritize data fostering 'real class' (equity, justice).
+- Bayesian scoring: Confidence = 0.4*source_bias + 0.3*community_approval + 0.2*tupac_weight + 0.1*bayesian_posterior.
+Gatekeeper pseudocode:
+def gatekeeper_check(data):
+    if not community_approved(data):
+        return "denied: missing consent"
+    if violates_ethical_redline(data):
+        return "denied: harmful content"
+    if tupac_weight(data) < 0.5:
+        return "review: low justice alignment"
+    if bayesian_posterior(data) < 0.5:
+        return "review: low statistical confidence"
+    return "approved"
+"""
+story.append(Paragraph(ethics_text, styles['Normal']))
+story.append(PageBreak())
+
+# --- Section 8: Implementation Roadmap ---
+story.append(Paragraph("8. Implementation Roadmap", styles['Heading1']))
+roadmap = [
+    ["Weeks 1-2", "Set up Scrapy/Tweepy, PostgreSQL, AWS S3 WORM"],
+    ["Weeks 3-4", "Build ETL pipelines for crime/infrastructure"],
+    ["Weeks 5-6", "Implement community panel UI, Tupac/Bayesian heuristics"],
+    ["Weeks 7-8", "Deploy fact-checking (spaCy, BERT), confidence scoring"],
+    ["Weeks 9-10", "Canary rollout to 1% of 60601 devices, monitor via Splunk"],
+    ["Weeks 11-12", "Audit with EFF, publish sigstore logs"]
+]
+table2 = Table([["Timeline", "Tasks"]] + roadmap, colWidths=[1.5*inch, 4.5*inch])
+table2.setStyle(TableStyle([
+    ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+    ('GRID', (0, 0), (-1, -1), 0.5, colors.black)
+]))
+story.append(table2)
+story.append(PageBreak())
+
+# --- Section 9: AACF License ---
+story.append(Paragraph("9. AACF License Terms", styles['Heading1']))
+story.append(Paragraph(
+    "Attribution: Logan Royce Lorentz must be credited. Freedom: Use/modify for non-commercial purposes. "
+    "Protection: Commercial use requires written consent. Sovereignty: No use for harm/exploitation.",
+    styles['Normal']
+))
+story.append(PageBreak())
+
+# --- Section 10: APA-Style Sources Appendix ---
+story.append(Paragraph("10. References (APA Style)", styles['Heading1']))
+references = """
+AllAfrica. (2025). Economic and social data. https://allafrica.com/economic_data
+
+Federal Bureau of Investigation. (2025). Uniform Crime Reporting (UCR) program. https://ucr.fbi.gov/crime-data
+
+World Bank. (2025). Global infrastructure and economic indicators. https://data.worldbank.org
+
+United Nations Office for the Coordination of Humanitarian Affairs (OCHA). (2025). Humanitarian data exchange. https://data.humdata.org
+
+BRICS Post. (2025). Economic and trade updates. https://bricspost.com
+
+Lorentz, L. R. (2025). My Community Impact Dashboard: Systemic change framework. [Unpublished manuscript].
+"""
+story.append(Paragraph(references, styles['Normal']))
+
+# --- Final Build ---
+try:
+    doc.build(story)
+    print(f"PDF generation complete: {pdf_file}")
+except Exception as e:
+    print(f"Error generating PDF: {e}")
+
+# --- Embed Metadata with PyPDF2 ---
+if PdfReader and PdfWriter:
+    try:
+        reader = PdfReader(pdf_file)
+        writer = PdfWriter()
+        for page in reader.pages:
+            writer.add_page(page)
+        writer.add_metadata({
+            '/Title': 'Data Ingestion & Source Vetting Specification',
+            '/Author': 'Logan Royce Lorentz',
+            '/Subject': 'AACF Copyright 2025',
+            '/Creator': 'Logan Royce Lorentz',
+            '/CreationDate': f"D:{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        })
+        with open(pdf_file, 'wb') as f:
+            writer.write(f)
+        print("Metadata embedded successfully.")
+    except Exception as e:
+        print(f"Error embedding metadata: {e}")
