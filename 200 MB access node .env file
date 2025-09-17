@@ -1,0 +1,12 @@
+# .env
+# Secrets and configuration for docker-compose
+
+# The pre-shared key for the Developer Tower (private)
+TOWER_SECRET_KEY=your_super_secret_tower_key_here!
+
+# The static API key for the Access Node (shared with the Replit builder)
+API_KEY=your_static_api_key_here_for_prod
+
+# Network configuration
+RESONANT_NETWORK_HOST=developer-tower
+RESONANT_NETWORK_PORT=50051
