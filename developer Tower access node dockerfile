@@ -1,0 +1,83 @@
+# ----------------------------
+# Stage 1: Build stage
+# ----------------------------
+FROM python:3.11-slim AS builder
+
+# Metadata
+LABEL maintainer="Your Name <you@example.com>"
+LABEL description="Builder for Access-node AI & GitHub integration stack"
+
+# System dependencies for building Python packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    git \
+    curl \
+    wget \
+    libssl-dev \
+    libffi-dev \
+    sqlite3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Upgrade pip
+RUN python -m pip install --upgrade pip
+
+# Install Poetry
+ENV POETRY_HOME="/opt/poetry"
+ENV PATH="$POETRY_HOME/bin:$PATH"
+RUN curl -sSL https://install.python-poetry.org | python3 -
+
+# Set working directory
+WORKDIR /app
+
+# Copy project files for dependency resolution
+COPY pyproject.toml poetry.lock* /app/
+
+# Install dependencies into a virtual environment
+RUN poetry config virtualenvs.create true \
+    && poetry install --no-dev --no-interaction --no-ansi
+
+# Copy the source code
+COPY src /app/src
+COPY config.yaml /app/config.yaml
+
+# ----------------------------
+# Stage 2: Runtime stage
+# ----------------------------
+FROM python:3.11-slim
+
+# Metadata
+LABEL maintainer="Your Name <you@example.com>"
+LABEL description="Production runtime image for Access-node AI & GitHub integration stack"
+
+# System dependencies needed at runtime
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    sqlite3 \
+    git \
+    curl \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV CONFIG_PATH="/app/config.yaml"
+
+# Set working directory
+WORKDIR /app
+
+# Copy source code and config from builder
+COPY --from=builder /app/src /app/src
+COPY --from=builder /app/config.yaml /app/config.yaml
+
+# Copy Poetry virtual environment from builder
+COPY --from=builder /root/.cache/pypoetry/virtualenvs /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Create storage directories
+RUN mkdir -p /app/data /app/storage/artifacts
+
+# Expose ports if your app serves HTTP (optional)
+# EXPOSE 8000
+
+# Set default entrypoint
+CMD ["python", "-m", "src.main"]
