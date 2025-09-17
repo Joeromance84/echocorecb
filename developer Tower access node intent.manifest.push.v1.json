@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://access-node.com/schemas/intent/manifest/push.v1.json",
+  "$comment": "JSON Schema for the 'push' intent manifest (Version 1).",
+  "title": "Intent Manifest: push v1",
+  "description": "Schema for requesting a push of files, code, or artifacts to a target system.",
+  "type": "object",
+  "required": ["intent", "version", "payload"],
+  "properties": {
+    "intent": {
+      "const": "push",
+      "description": "The intent type identifier."
+    },
+    "version": {
+      "const": "v1",
+      "description": "Version of the push manifest schema."
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Optional metadata for traceability and auditing.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Unique identifier for this manifest event."
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Time the manifest was created (ISO 8601)."
+        },
+        "requester": {
+          "type": "string",
+          "description": "ID of the requesting agent, service, or user."
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Optional labels for routing, categorization, or analytics."
+        }
+      },
+      "additionalProperties": false
+    },
+    "payload": {
+      "type": "object",
+      "description": "Core execution payload for the push intent.",
+      "required": ["target", "artifacts"],
+      "properties": {
+        "target": {
+          "type": "object",
+          "description": "Destination details for the push operation.",
+          "required": ["type", "identifier"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["git", "filesystem", "artifact_repo", "custom_service"],
+              "description": "Type of target system."
+            },
+            "identifier": {
+              "type": "string",
+              "description": "Unique identifier of the target (e.g., repo URL, filesystem path, service ID)."
+            },
+            "credentials": {
+              "type": "object",
+              "description": "Optional authentication details for the target system.",
+              "properties": {
+                "token": { "type": "string" },
+                "username": { "type": "string" },
+                "password": { "type": "string" }
+              },
+              "additionalProperties": false
+            },
+            "branch": {
+              "type": "string",
+              "description": "Optional branch or path for VCS targets."
+            }
+          },
+          "additionalProperties": false
+        },
+        "artifacts": {
+          "type": "array",
+          "description": "List of files or items to push.",
+          "items": {
+            "type": "object",
+            "required": ["name", "content", "type"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Artifact name or relative path."
+              },
+              "type": {
+                "type": "string",
+                "enum": ["file", "directory", "package", "script", "binary", "custom"],
+                "description": "Type of artifact."
+              },
+              "content": {
+                "type": "string",
+                "description": "Base64-encoded content for the artifact. Could also be a URL reference if type supports it."
+              },
+              "permissions": {
+                "type": "string",
+                "description": "Optional POSIX-style permissions (e.g., '644' or '755')."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "commit_message": {
+          "type": "string",
+          "description": "Optional commit or push message for versioned systems (e.g., Git)."
+        },
+        "overwrite": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether to overwrite existing artifacts at the target."
+        },
+        "post_push_hooks": {
+          "type": "array",
+          "description": "Optional hooks or commands to run after a successful push.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": { "type": "string", "enum": ["shell", "script", "custom"] },
+              "command": { "type": "string" },
+              "args": { "type": "array", "items": { "type": "string" } }
+            },
+            "required": ["type", "command"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "signature": {
+      "type": "object",
+      "description": "Cryptographic signature for authenticity and integrity.",
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "enum": ["ed25519", "rsa-2048", "rsa-4096", "ecdsa-p256"],
+          "description": "Algorithm used for signing."
+        },
+        "value": {
+          "type": "string",
+          "description": "Base64-encoded signature string."
+        },
+        "key_id": {
+          "type": "string",
+          "description": "Identifier of the key used to sign this manifest."
+        }
+      },
+      "required": ["algorithm", "value", "key_id"],
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
