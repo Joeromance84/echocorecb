@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://access-node.com/schemas/intent/manifest/clone.v1.json",
+  "$comment": "JSON Schema for the 'clone' intent manifest (Version 1).",
+  "title": "Intent Manifest: clone v1",
+  "description": "Schema for requesting a clone operation of a repository, directory, or artifact source.",
+  "type": "object",
+  "required": ["intent", "version", "payload"],
+  "properties": {
+    "intent": {
+      "const": "clone",
+      "description": "The intent type identifier."
+    },
+    "version": {
+      "const": "v1",
+      "description": "Version of the clone manifest schema."
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Optional metadata for traceability and auditing.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Unique identifier for this manifest event."
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Time the manifest was created (ISO 8601)."
+        },
+        "requester": {
+          "type": "string",
+          "description": "ID of the requesting agent, service, or user."
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Optional labels for routing, categorization, or analytics."
+        }
+      },
+      "additionalProperties": false
+    },
+    "payload": {
+      "type": "object",
+      "description": "Core execution payload for the clone intent.",
+      "required": ["source", "destination"],
+      "properties": {
+        "source": {
+          "type": "object",
+          "description": "Details of the source to clone from.",
+          "required": ["type", "identifier"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["git", "filesystem", "artifact_repo", "custom_service"],
+              "description": "Type of source system."
+            },
+            "identifier": {
+              "type": "string",
+              "description": "Unique identifier of the source (e.g., repo URL, filesystem path, service ID)."
+            },
+            "branch": {
+              "type": "string",
+              "description": "Optional branch or version for version-controlled sources."
+            },
+            "credentials": {
+              "type": "object",
+              "description": "Optional authentication details for the source.",
+              "properties": {
+                "token": { "type": "string" },
+                "username": { "type": "string" },
+                "password": { "type": "string" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "destination": {
+          "type": "object",
+          "description": "Local or target location to store the cloned content.",
+          "required": ["type", "path"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["filesystem", "container_volume", "custom_service"],
+              "description": "Destination type."
+            },
+            "path": {
+              "type": "string",
+              "description": "Target path or identifier where the cloned content will be placed."
+            },
+            "overwrite": {
+              "type": "boolean",
+              "default": false,
+              "description": "Whether to overwrite existing content at the destination."
+            }
+          },
+          "additionalProperties": false
+        },
+        "shallow": {
+          "type": "boolean",
+          "default": false,
+          "description": "Perform a shallow clone (e.g., Git shallow clone)."
+        },
+        "submodules": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether to include submodules if the source is a Git repository."
+        },
+        "post_clone_hooks": {
+          "type": "array",
+          "description": "Optional hooks or commands to run after a successful clone.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": { "type": "string", "enum": ["shell", "script", "custom"] },
+              "command": { "type": "string" },
+              "args": { "type": "array", "items": { "type": "string" } }
+            },
+            "required": ["type", "command"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "signature": {
+      "type": "object",
+      "description": "Cryptographic signature for authenticity and integrity.",
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "enum": ["ed25519", "rsa-2048", "rsa-4096", "ecdsa-p256"],
+          "description": "Algorithm used for signing."
+        },
+        "value": {
+          "type": "string",
+          "description": "Base64-encoded signature string."
+        },
+        "key_id": {
+          "type": "string",
+          "description": "Identifier of the key used to sign this manifest."
+        }
+      },
+      "required": ["algorithm", "value", "key_id"],
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
