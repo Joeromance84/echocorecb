@@ -1,0 +1,56 @@
+# docker-compose.yml
+version: '3.8'
+
+services:
+  # The Developer Tower: The core gRPC execution engine
+  developer-tower:
+    build:
+      context: ./developer_tower
+      dockerfile: Dockerfile
+    container_name: developer_tower
+    hostname: developer-tower
+    networks:
+      - resonant-network
+    ports:
+      - "50051:50051"  # gRPC server port
+    environment:
+      # Secrets and configs passed from .env
+      - TOWER_SECRET_KEY=${TOWER_SECRET_KEY}
+      - TOWER_HOST=0.0.0.0
+      - TOWER_PORT=50051
+    volumes:
+      # Persistent storage for artifacts and logs
+      - developer_tower_data:/app/app_data
+    restart: unless-stopped
+    # Resource limits to constrain the container's usage
+    deploy:
+      resources:
+        limits:
+          cpus: '8'
+          memory: 16G
+
+  # The Access Node: The minimalist FastAPI gateway
+  access-node:
+    build:
+      context: ./access_node
+      dockerfile: Dockerfile
+    container_name: access_node
+    networks:
+      - resonant-network
+    ports:
+      - "8000:8000"  # FastAPI server port
+    environment:
+      # These should match the host and port of the developer-tower service
+      - RESONANT_NETWORK_HOST=developer-tower
+      - RESONANT_NETWORK_PORT=50051
+      - API_KEY=${API_KEY}
+    depends_on:
+      - developer-tower
+    restart: unless-stopped
+
+volumes:
+  developer_tower_data:  # Named volume for persistent storage
+
+networks:
+  resonant-network:  # Isolated bridge network for internal communication
+    driver: bridge
