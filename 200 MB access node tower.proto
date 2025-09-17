@@ -1,0 +1,65 @@
+// developer_tower/tower_api/v1/tower.proto
+// This file defines the gRPC contract between the Access Node and the Developer Tower.
+
+syntax = "proto3";
+
+package tower.v1;
+
+option python_package = "tower_api.v1";
+option go_package = "tower_api/v1";
+
+// The ExecutionService defines the set of remote procedures the Access Node can call.
+service ExecutionService {
+  // Executes a given Python code snippet on the Tower's unrestricted environment.
+  rpc RunPython (RunPythonRequest) returns (ExecutionResponse);
+  
+  // Executes a shell command on the Tower.
+  rpc RunShell (RunShellRequest) returns (ExecutionResponse);
+  
+  // Stores a file/artifact on the Tower's filesystem.
+  rpc StoreArtifact (StoreArtifactRequest) returns (ExecutionResponse);
+  
+  // Retrieves a previously stored file/artifact.
+  rpc RetrieveArtifact (RetrieveArtifactRequest) returns (RetrieveArtifactResponse);
+  
+  // Gets information about the Tower's system resources (CPU, GPU, etc.).
+  rpc GetSystemInfo (GetSystemInfoRequest) returns (ExecutionResponse);
+}
+
+// --- Common Message for All Execution Results ---
+message ExecutionResponse {
+  int32 return_code = 1;      // Standard return code (0 for success, non-zero for error).
+  string stdout = 2;          // Standard output from the command or script.
+  string stderr = 3;          // Standard error output.
+  string execution_id = 4;    // A unique ID to track this specific execution.
+}
+
+// --- RunPython ---
+message RunPythonRequest {
+  string code = 1;            // The Python code to execute.
+  string session_id = 2;      // A session identifier for stateful execution (optional).
+}
+
+// --- RunShell ---
+message RunShellRequest {
+  string command = 1;         // The shell command to execute.
+}
+
+// --- StoreArtifact ---
+message StoreArtifactRequest {
+  string path = 1;            // The logical path to store the artifact.
+  bytes content = 2;          // The raw binary content of the artifact.
+}
+
+// --- RetrieveArtifact ---
+message RetrieveArtifactRequest {
+  string path = 1;            // The path to retrieve the artifact from.
+}
+
+message RetrieveArtifactResponse {
+  bytes content = 1;          // The raw binary content of the retrieved artifact.
+  bool success = 2;           // True if the retrieval was successful.
+}
+
+// --- GetSystemInfo ---
+message GetSystemInfoRequest {} // Empty request for a system info query.
