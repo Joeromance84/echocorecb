@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://access-node.com/schemas/intent/manifest/queryAI.v1.json",
+  "$comment": "JSON Schema for the 'queryAI' intent manifest (Version 1).",
+  "title": "Intent Manifest: queryAI v1",
+  "description": "Schema for requesting a response from an AI model.",
+  "type": "object",
+  "required": ["intent", "version", "payload"],
+  "properties": {
+    "intent": {
+      "const": "queryAI",
+      "description": "The intent type identifier."
+    },
+    "version": {
+      "const": "v1",
+      "description": "Version of the queryAI manifest schema."
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Optional metadata for traceability, auditing, and correlation.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Unique identifier for this manifest event."
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Time the manifest was created (ISO 8601)."
+        },
+        "requester": {
+          "type": "string",
+          "description": "ID of the requesting agent, service, or user."
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Optional labels for routing, categorization, or analytics."
+        }
+      },
+      "additionalProperties": false
+    },
+    "payload": {
+      "type": "object",
+      "description": "Core execution payload for the queryAI intent.",
+      "required": ["prompt"],
+      "properties": {
+        "prompt": {
+          "type": "string",
+          "description": "The textual prompt to send to the AI model."
+        },
+        "model": {
+          "type": "string",
+          "description": "The AI model to query (e.g., 'openai/gpt-4o-mini', 'custom/local_llama')."
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2,
+          "default": 0.7,
+          "description": "Sampling temperature controlling creativity and randomness."
+        },
+        "max_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000,
+          "default": 1000,
+          "description": "Maximum number of tokens to generate."
+        },
+        "stream": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether to stream partial outputs from the model."
+        },
+        "stop_sequences": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Optional stop sequences to terminate generation early."
+        },
+        "top_p": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 1,
+          "description": "Nucleus sampling probability."
+        },
+        "frequency_penalty": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2,
+          "default": 0,
+          "description": "Penalty for repeated tokens."
+        },
+        "presence_penalty": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2,
+          "default": 0,
+          "description": "Penalty for introducing new topics repeatedly."
+        },
+        "context": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "role": { "type": "string", "enum": ["system", "user", "assistant"] },
+              "content": { "type": "string" }
+            },
+            "required": ["role", "content"],
+            "additionalProperties": false
+          },
+          "description": "Optional conversation history to provide context for the AI."
+        }
+      },
+      "additionalProperties": false
+    },
+    "signature": {
+      "type": "object",
+      "description": "Cryptographic signature for authenticity and integrity.",
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "enum": ["ed25519", "rsa-2048", "rsa-4096", "ecdsa-p256"],
+          "description": "Algorithm used for signing."
+        },
+        "value": {
+          "type": "string",
+          "description": "Base64-encoded signature string."
+        },
+        "key_id": {
+          "type": "string",
+          "description": "Identifier of the key used to sign this manifest."
+        }
+      },
+      "required": ["algorithm", "value", "key_id"],
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
