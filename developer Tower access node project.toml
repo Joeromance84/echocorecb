@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "access-node"
+version = "1.0.0"
+description = "AI & GitHub integration stack"
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+packages = [{include = "src"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+aiosqlite = "0.20.0"
+pyyaml = "6.0.2"
+openai = "^1.0.0"  # For AI proxy (e.g., OpenAI API)
+pygithub = "^2.0.0"  # For GitHub client
+
+[tool.poetry.dev-dependencies]
+pytest = "8.3.3"
+pytest-asyncio = "0.24.0"
+
+[build-system]
+requires = ["poetry-core>=1.4.0"]
+build-backend = "poetry.core.masonry.api"
