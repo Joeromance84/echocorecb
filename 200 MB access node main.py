@@ -1,7 +1,6 @@
-# src/main.py
-
 import uvicorn
 from fastapi import FastAPI, Depends
+from fastapi.responses import JSONResponse
 
 from .database.ledger import ResonantLedger
 from .core.resonant_client import ResonantClient
@@ -32,6 +31,15 @@ def get_client_singleton() -> ResonantClient:
 # The prefix is for better organization.
 app.include_router(api_router, prefix="/api")
 
+# Add the health check endpoint for Docker and monitoring
+@app.get("/health", response_class=JSONResponse, status_code=200)
+async def health_check():
+    """
+    Endpoint to perform a health check.
+    Used by Docker and load balancers to check service availability.
+    """
+    return {"status": "healthy"}
+
 @app.on_event("startup")
 async def startup_event():
     """Event handler for application startup."""
@@ -48,9 +56,9 @@ async def shutdown_event():
 # This part is crucial for making the APK's service work.
 if __name__ == "__main__":
     uvicorn.run(
-        "main:app", 
-        host="0.0.0.0", 
-        port=8000, 
-        log_level="info", 
+        "main:app",
+        host="0.0.0.0",
+        port=8000,
+        log_level="info",
         reload=True  # Use reload for development
     )
