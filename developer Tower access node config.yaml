@@ -1,0 +1,433 @@
+system:
+  environment: "production"
+  debug: false
+  logging:
+    level: "INFO"
+    format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    file: "/var/log/echo_system.log"
+    max_bytes: 10485760
+    backup_count: 5
+
+sandbox:
+  docker_image: "python:3.11-slim"
+  cpu_limit: 0.5
+  memory_limit_mb: 256
+  ulimit_nproc: 1024
+  allow_network: false
+  timeout_default: 10
+  mount_tmp_dir: true
+  auto_cleanup: true
+
+ai_proxy:
+  default_model: "openai/gpt-4o-mini"
+  api_keys:
+    openai: "${OPENAI_API_KEY}"
+  streaming_chunk_size: 1024
+  max_retries: 3
+  retry_backoff_sec: 1.5
+
+github:
+  token: "${GITHUB_TOKEN}"
+  api_base_url: "https://api.github.com"
+  api_version: "2022-11-28"
+  default_org: "my-org"
+  rate_limit_warn_threshold: 80
+
+manifest:
+  schema_version: "v1"
+  default_timeout_sec: 30
+  intents:
+    runPython:
+      allowed: true
+      timeout_sec: 10
+      resource_limits:
+        cpu: 0.5
+        memory_mb: 128
+    runShell:
+      allowed: true
+      timeout_sec: 10
+    clone:
+      allowed: true
+      shallow_default: false
+      submodules_default: false
+    push:
+      allowed: true
+    queryAI:
+      allowed: true
+      stream_default: false
+
+crypto:
+  default_algorithm: "ed25519"
+  key_store_path: "/etc/echo/keys"
+  signature_required: true
+  signature_validation: true
+
+network:
+  allow_external_requests: false
+  proxy:
+    enabled: false
+    url: ""
+  dns_cache_ttl_sec: 300
+
+services:
+  cache:
+    enabled: true
+    type: "redis"
+    host: "127.0.0.1"
+    port: 6379
+    password: ""
+  database:
+    enabled: true
+    type: "postgresql"
+    host: "127.0.0.1"
+    port: 5432
+    username: "echo"
+    password: "${DB_PASSWORD}"
+    database: "echo_db"
+    pool_min: 1
+    pool_max: 10
+  message_bus:
+    enabled: true
+    type: "nats"
+    servers:
+      - "nats://127.0.0.1:4222"
+    default_timeout_sec: 5
+
+metrics:
+  enabled: true
+  prometheus:
+    endpoint: "/metrics"
+    port: 9090
+  alert_thresholds:
+    sandbox_timeout_sec: 15
+    git_rate_limit_percent: 90
+    ai_proxy_retries: 5
+
+security:
+  require_auth: true
+  allowed_users: []
+  allowed_roles: ["admin", "devops", "ai_operator"]
+  secret_encryption:
+    enabled: true
+    algorithm: "aes-256-gcm"
+    key_path: "/etc/echo/secrets/key.enc"
+
+app:
+  name: "my-advanced-app"
+  version: "2.1.0"
+  environment: ${APP_ENV:production}
+  debug: ${DEBUG:false}
+  secret_key: ${SECRET_KEY:your-super-secret-key-change-in-production}
+  timezone: "UTC"
+  locale: "en_US"
+
+server:
+  host: "0.0.0.0"
+  port: ${PORT:8000}
+  workers: ${WORKERS:4}
+  timeout: 30
+  graceful_shutdown_timeout: 30
+  max_request_size: "10MB"
+  cors:
+    enabled: true
+    origins:
+      - "https://example.com"
+      - "https://*.example.com"
+    methods:
+      - "GET"
+      - "POST"
+      - "PUT"
+      - "DELETE"
+      - "OPTIONS"
+    headers:
+      - "Content-Type"
+      - "Authorization"
+
+database:
+  primary:
+    driver: "postgresql"
+    host: ${DB_HOST:localhost}
+    port: ${DB_PORT:5432}
+    name: ${DB_NAME:myapp}
+    user: ${DB_USER:postgres}
+    password: ${DB_PASSWORD:}
+    pool:
+      max_connections: 20
+      min_connections: 5
+      max_lifetime: 3600
+      idle_timeout: 300
+    ssl_mode: "prefer"
+    timeout: 30
+  replica:
+    driver: "postgresql"
+    host: ${DB_REPLICA_HOST:localhost}
+    port: ${DB_REPLICA_PORT:5432}
+    name: ${DB_REPLICA_NAME:myapp}
+    user: ${DB_REPLICA_USER:postgres}
+    password: ${DB_REPLICA_PASSWORD:}
+    pool:
+      max_connections: 15
+      min_connections: 3
+
+redis:
+  main:
+    host: ${REDIS_HOST:localhost}
+    port: ${REDIS_PORT:6379}
+    password: ${REDIS_PASSWORD:}
+    db: 0
+    pool_size: 10
+    connect_timeout: 5
+    read_timeout: 3
+    write_timeout: 3
+  cache:
+    host: ${REDIS_CACHE_HOST:localhost}
+    port: ${REDIS_CACHE_PORT:6379}
+    db: 1
+    key_prefix: "cache:"
+
+cache:
+  default: "redis"
+  stores:
+    redis:
+      driver: "redis"
+      connection: "cache"
+      default_ttl: 3600
+    memory:
+      driver: "memory"
+      default_ttl: 300
+      max_size: 10000
+
+logging:
+  level: ${LOG_LEVEL:INFO}
+  format: "json"
+  handlers:
+    file:
+      enabled: true
+      path: "/var/log/app/app.log"
+      max_size: "100MB"
+      backup_count: 10
+    console:
+      enabled: true
+    sentry:
+      enabled: ${SENTRY_ENABLED:false}
+      dsn: ${SENTRY_DSN:}
+      environment: ${APP_ENV:production}
+  loggers:
+    app:
+      level: "INFO"
+      handlers: ["file", "console"]
+    database:
+      level: "WARNING"
+      handlers: ["file"]
+    security:
+      level: "INFO"
+      handlers: ["file", "sentry"]
+
+monitoring:
+  prometheus:
+    enabled: true
+    port: 9090
+    path: "/metrics"
+  health_check:
+    enabled: true
+    path: "/health"
+    interval: 30
+  tracing:
+    enabled: ${TRACING_ENABLED:false}
+    exporter: "jaeger"
+    sampler: "probabilistic"
+    sampler_param: 0.1
+
+services:
+  email:
+    provider: "smtp"
+    smtp:
+      host: ${SMTP_HOST:smtp.gmail.com}
+      port: ${SMTP_PORT:587}
+      username: ${SMTP_USERNAME:}
+      password: ${SMTP_PASSWORD:}
+      encryption: "tls"
+    sendgrid:
+      api_key: ${SENDGRID_API_KEY:}
+      default_from: "noreply@example.com"
+
+  storage:
+    default: "s3"
+    s3:
+      endpoint: ${S3_ENDPOINT:}
+      region: ${S3_REGION:us-east-1}
+      bucket: ${S3_BUCKET:}
+      access_key: ${S3_ACCESS_KEY:}
+      secret_key: ${S3_SECRET_KEY:}
+      use_ssl: true
+    local:
+      path: "/var/storage"
+      base_url: "/storage"
+
+  messaging:
+    rabbitmq:
+      host: ${RABBITMQ_HOST:localhost}
+      port: ${RABBITMQ_PORT:5672}
+      username: ${RABBITMQ_USERNAME:guest}
+      password: ${RABBITMQ_PASSWORD:guest}
+      vhost: "/"
+      queue_prefix: "app_"
+
+auth:
+  jwt:
+    secret: ${JWT_SECRET:}
+    algorithm: "HS256"
+    access_token_expiry: 3600
+    refresh_token_expiry: 2592000
+    issuer: "my-app"
+  oauth:
+    google:
+      client_id: ${GOOGLE_CLIENT_ID:}
+      client_secret: ${GOOGLE_CLIENT_SECRET:}
+      redirect_uri: "/auth/google/callback"
+    github:
+      client_id: ${GITHUB_CLIENT_ID:}
+      client_secret: ${GITHUB_CLIENT_SECRET:}
+      redirect_uri: "/auth/github/callback"
+
+rate_limiting:
+  enabled: true
+  storage: "redis"
+  default:
+    limit: 100
+    period: 60
+  endpoints:
+    "/api/v1/auth/login":
+      limit: 5
+      period: 300
+    "/api/v1/users":
+      limit: 10
+      period: 60
+
+features:
+  new_dashboard: false
+  experimental_api: true
+  maintenance_mode: false
+  beta_features:
+    enabled: false
+    allowed_users: []
+    percentage: 10
+
+security:
+  https_redirect: true
+  hsts:
+    enabled: true
+    max_age: 31536000
+    include_subdomains: true
+  csp:
+    enabled: true
+    directives:
+      default-src: ["'self'"]
+      script-src: ["'self'", "'unsafe-inline'", "cdn.example.com"]
+      style-src: ["'self'", "'unsafe-inline'"]
+      img-src: ["'self'", "data:", "blob:"]
+  rate_limiting: true
+  request_id_header: "X-Request-ID"
+
+api:
+  version: "v1"
+  base_path: "/api"
+  default_limit: 20
+  max_limit: 100
+  documentation:
+    enabled: true
+    path: "/docs"
+    theme: "swagger"
+  validation:
+    strict: true
+    coerce_types: true
+
+jobs:
+  worker_count: 4
+  queue:
+    default: "default"
+    high_priority: "high"
+    low_priority: "low"
+  retry:
+    max_attempts: 3
+    backoff: 300
+  timeout: 3600
+
+i18n:
+  default_locale: "en"
+  supported_locales:
+    - "en"
+    - "es"
+    - "fr"
+    - "de"
+  fallback_locale: "en"
+  load_path: "locales"
+
+templates:
+  engine: "jinja2"
+  directory: "templates"
+  auto_reload: ${DEBUG:false}
+  cache_size: 100
+  extensions:
+    - "jinja2.ext.i18n"
+    - "jinja2.ext.do"
+
+uploads:
+  max_size: "50MB"
+  allowed_extensions:
+    - "jpg"
+    - "jpeg"
+    - "png"
+    - "gif"
+    - "pdf"
+    - "doc"
+    - "docx"
+  temp_directory: "/tmp/uploads"
+  preserve_filename: false
+
+schedules:
+  cleanup_temp_files:
+    task: "cleanup_temp_files"
+    cron: "0 2 * * *"
+    enabled: true
+  generate_reports:
+    task: "generate_reports"
+    cron: "0 0 * * 0"
+    enabled: true
+
+environments:
+  development:
+    app:
+      debug: true
+      environment: "development"
+    database:
+      primary:
+        host: "localhost"
+        pool:
+          max_connections: 10
+    logging:
+      level: "DEBUG"
+    templates:
+      auto_reload: true
+  testing:
+    app:
+      environment: "testing"
+      debug: false
+    database:
+      primary:
+        name: "test_myapp"
+        pool:
+          max_connections: 5
+    cache:
+      default: "memory"
+  production:
+    app:
+      debug: false
+      secret_key: ${PRODUCTION_SECRET_KEY}
+    server:
+      workers: 8
+    database:
+      primary:
+        pool:
+          max_connections: 50
+        ssl_mode: "require"
