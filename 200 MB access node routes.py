@@ -1,102 +1,91 @@
-# src/api/routes.py
+# access_node/src/api/routes.py
 
-from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel, Field
-from typing import Dict, Any, List
+"""
+API Routes for the Access Node.
+Implements a single HTTP endpoint that acts as a secure, permission-gated
+gateway to the Developer Tower's gRPC service.
+"""
 
+from fastapi import APIRouter, HTTPException, status, Depends
+from pydantic import BaseModel, Field, PrivateAttr
+from typing import Dict, Any
+
+from ..core.config import API_KEY
+from ..database.ledger import check_permission
 from ..core.resonant_client import ResonantClient
-from ..database.ledger import ResonantLedger
 
-# The APIRouter organizes our endpoints.
+# --- Pydantic Models for Request and Response ---
+
+class IntentPayload(BaseModel):
+    """
+    Defines the structure of the incoming HTTP request payload.
+    The 'intent' field can be any valid JSON structure (a dictionary).
+    """
+    api_key: str = Field(..., description="The static API key for authentication.")
+    action: str = Field(..., description="The requested action (e.g., 'run_python').")
+    intent: Dict[str, Any] = Field(..., description="The specific, unrestricted payload for the Developer Tower.")
+
+class ExecutionResponse(BaseModel):
+    """
+    Defines the structure of the HTTP response from the Access Node.
+    """
+    status: str
+    message: str
+    data: Dict[str, Any]
+
+# --- Dependency Injection for ResonantClient ---
+# This ensures a single, persistent gRPC client is used for all requests.
+_resonant_client_instance = ResonantClient()
+
+def get_resonant_client():
+    """Provides the singleton instance of the ResonantClient."""
+    return _resonant_client_instance
+
+# --- API Router Definition ---
+
 router = APIRouter()
 
-# --- Dependency Injection for our singletons ---
-# We will use FastAPI's dependency injection to manage the lifecycle of our
-# database and client objects.
-
-async def get_ledger() -> ResonantLedger:
-    """Provides a single instance of the ResonantLedger."""
-    # This is a placeholder for a true application-scoped singleton.
-    # In main.py, we will instantiate the ledger once.
-    ledger = ResonantLedger()
-    return ledger
-
-async def get_client() -> ResonantClient:
-    """Provides a single instance of the ResonantClient."""
-    # This is also a placeholder; the client will be managed in main.py.
-    client = ResonantClient()
-    return client
-
-# --- Pydantic Models for Data Validation ---
-class ConfigPayload(BaseModel):
-    """Schema for the dynamic configuration payload."""
-    user_id: str = Field(..., description="A unique identifier for the AI builder.")
-    allowed_actions: List[str] = Field(..., description="List of actions the AI is permitted to perform.")
-    credentials: Dict[str, Any] = Field(..., description="Connection credentials (e.g., host, port, API keys).")
-    
-class IntentPayload(BaseModel):
-    """Schema for the AI's operational request payload."""
-    user_id: str = Field(..., description="The unique identifier for the AI builder.")
-    action: str = Field(..., description="The specific action to perform (e.g., 'run_python').")
-    data: Dict[str, Any] = Field(..., description="The payload for the action.")
-    
-# --- API Endpoints ---
-@router.post("/configure", status_code=200)
-async def configure_access(
-    payload: ConfigPayload,
-    ledger: ResonantLedger = Depends(get_ledger)
-):
-    """
-    Endpoint for a one-time configuration from the Replit builder.
-    This dynamically updates the permissions ledger.
-    """
-    try:
-        ledger.update_permissions(
-            user_id=payload.user_id,
-            allowed_actions=payload.allowed_actions,
-            credentials=payload.credentials
-        )
-        return {"status": "success", "message": "Access configured successfully."}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to configure access: {str(e)}")
-
-@router.post("/execute", status_code=200)
+@router.post(
+    "/execute",
+    summary="Executes a command on the Developer Tower.",
+    response_model=ExecutionResponse,
+    status_code=status.HTTP_200_OK
+)
 async def execute_intent(
     payload: IntentPayload,
-    ledger: ResonantLedger = Depends(get_ledger),
-    client: ResonantClient = Depends(get_client)
+    resonant_client: ResonantClient = Depends(get_resonant_client)
 ):
     """
-    Main endpoint for the AI to execute an action on the Developer Tower.
-    Performs a permission check and offloads the task.
+    This endpoint serves as the secure gateway. It authenticates the request
+    using the hardcoded API key, verifies permissions via the ledger, and
+    forwards the payload to the Developer Tower via a gRPC call.
     """
-    # 1. Permission Check
-    if not ledger.check_permission(payload.user_id, payload.action):
+    # 1. Static API Key Authentication
+    if payload.api_key != API_KEY:
         raise HTTPException(
-            status_code=403, 
-            detail=f"User '{payload.user_id}' does not have permission to perform action '{payload.action}'."
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API Key."
         )
 
-    # 2. Dynamic Connection & Offloading
-    credentials = ledger.get_credentials(payload.user_id)
-    if not credentials:
-        raise HTTPException(status_code=404, detail="Credentials not found for user.")
-        
-    host = credentials.get("host")
-    port = credentials.get("port")
-    # For a real implementation, certificate paths would be stored securely.
-    keyfile = credentials.get("keyfile")
-    certfile = credentials.get("certfile")
-    
-    if not client.is_connected():
-        if not client.connect_to_tower(host, port, keyfile, certfile):
-            raise HTTPException(status_code=503, detail="Failed to connect to the Developer Tower.")
-    
-    # 3. Remote Execution
+    # 2. Static Permission-Based Authorization
+    if not check_permission(payload.api_key, payload.action):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Permission denied for action: '{payload.action}'."
+        )
+
+    # 3. Securely forward the request via gRPC
     try:
-        # We offload the task to the Developer Tower via RPC.
-        result = client.execute_task(payload.action, **payload.data)
-        return {"status": "success", "result": result}
+        # The gRPC client handles the communication with the Developer Tower
+        result = await resonant_client.send_to_tower(payload)
+        return ExecutionResponse(
+            status="success",
+            message=f"Action '{payload.action}' executed successfully.",
+            data=result
+        )
     except Exception as e:
-        # A more detailed error could be returned for debugging.
-        raise HTTPException(status_code=500, detail=f"Remote execution failed: {str(e)}")
+        # Catch any errors during the gRPC call (e.g., Tower is down)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Execution on Developer Tower failed: {str(e)}"
+        )
