@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://access-node.com/schemas/intent/manifest/runPython.v1.json",
+  "$comment": "JSON Schema for the 'runPython' intent manifest (Version 1).",
+  "title": "Run Python Intent Manifest",
+  "description": "Defines the data structure for a payload intended to execute Python code within an isolated environment.",
+  "type": "object",
+  "properties": {
+    "version": {
+      "description": "The manifest version. Locked to 'v1' to ensure compatibility.",
+      "type": "string",
+      "const": "v1"
+    },
+    "code": {
+      "description": "The Python code to be executed.",
+      "type": "string",
+      "minLength": 1,
+      "examples": [
+        "print('Hello, Access-node!')",
+        "import os\nprint(os.listdir('.'))"
+      ]
+    },
+    "timeout_seconds": {
+      "description": "Maximum time in seconds to allow for execution before a timeout error.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 300,
+      "default": 60
+    },
+    "environment": {
+      "description": "A dictionary of environment variables to be set for the execution.",
+      "type": "object",
+      "patternProperties": {
+        "^[A-Z_]+[A-Z0-9_]*$": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "default": {},
+      "examples": [
+        {
+          "API_KEY": "my_secret_key",
+          "DEBUG_MODE": "true"
+        }
+      ]
+    },
+    "stream_logs": {
+      "description": "If true, logs will be streamed in real-time. If false, logs will be returned in a single response.",
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "required": [
+    "version",
+    "code"
+  ],
+  "additionalProperties": false
+}
