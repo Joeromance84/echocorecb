@@ -1,0 +1,469 @@
+access_node:
+  version: "1.0.0"
+  author: "Logan Royce Lorentz <Logan.lorentz9@gmail.com>"
+  license: "MIT License – Restricted Use"
+  description: "AI & GitHub integration stack with secure artifact management and task execution"
+  architecture:
+    type: "hexagonal"
+    layers:
+      - name: "External World"
+        description: "Clients send signed intent payloads to the API"
+      - name: "API Layer"
+        description: "Receives and validates requests, routes to controllers"
+        files: ["src/main.py", "src/api/routes.py", "src/common/smp_signature.py", "src/common/intent_schema.py"]
+      - name: "Controller Layer"
+        description: "Translates intents into low-level commands"
+        files: ["src/core/ai_proxy.py", "src/core/github_client.py"]
+      - name: "Core Engine"
+        description: "Handles task execution and sandboxing"
+        files: ["src/core/runtime.py", "src/core/task_manager.py", "src/runtime/executor.py", "src/runtime/sandbox.py"]
+      - name: "Data & Persistence Layer"
+        description: "Manages artifact storage and database operations"
+        files: ["src/artifacts/ledger.py", "src/artifacts/storage.py", "src/common/db.py"]
+      - name: "Configuration & Utilities"
+        description: "Provides configuration, logging, and utilities"
+        files: ["src/common/config.py", "src/common/utils.py", "src/common/smp_signature.py", "src/common/intent_schema.py"]
+
+  files:
+    root:
+      - name: "Dockerfile"
+        purpose: "Builds the production Docker image"
+        dependencies: ["pyproject.toml", "poetry.lock", "config.yaml", "LICENSE", "README.md", "src/*", "tests/*"]
+        connections: "Copies all project files into the image, installs dependencies via Poetry, runs src/main.py"
+      - name: "LICENSE"
+        purpose: "Defines the proprietary 'MIT License – Restricted Use' by Logan Royce Lorentz"
+        dependencies: []
+        connections: "Referenced by README.md, pyproject.toml, Dockerfile (via LABEL)"
+      - name: "pyproject.toml"
+        purpose: "Manages project metadata and dependencies"
+        dependencies: []
+        connections: "Used by Dockerfile, poetry.lock; defines dependencies (aiosqlite, pyyaml, openai, pygithub, fastapi, uvicorn, jsonschema, pytest, pytest-asyncio)"
+      - name: "poetry.lock"
+        purpose: "Locks dependency versions"
+        dependencies: ["pyproject.toml"]
+        connections: "Used by Dockerfile for reproducible builds"
+      - name: "requirements.txt"
+        purpose: "Lists production dependencies (exported from pyproject.toml)"
+        dependencies: ["pyproject.toml", "poetry.lock"]
+        connections: "Reference for dependency versions"
+      - name: "config.yaml"
+        purpose: "Stores configuration settings (e.g., API keys, database URL, storage path)"
+        dependencies: []
+        connections: "Loaded by src/common/config.py; used by src/artifacts/ledger.py, src/core/runtime.py, src/core/ai_proxy.py, src/core/github_client.py"
+      - name: "README.md"
+        purpose: "Documents setup, usage, and license"
+        dependencies: ["LICENSE"]
+        connections: "Referenced by pyproject.toml, copied by Dockerfile"
+    src:
+      - name: "src/__init__.py"
+        purpose: "Marks src as a Python package"
+        dependencies: []
+        connections: "Enables imports from src/*"
+      - name: "src/main.py"
+        purpose: "FastAPI server entry point with /tasks endpoint and schema validation"
+        dependencies: ["fastapi", "uvicorn", "jsonschema", "src/core/runtime.py", "src/common/db.py", "src/common/config.py", "src/schemas/protect_branch.json"]
+        connections: "Routes requests to RuntimeManager, enforces API key validation"
+      - name: "src/artifacts/__init__.py"
+        purpose: "Marks artifacts as a package"
+        dependencies: []
+        connections: "Enables imports from src/artifacts/*"
+      - name: "src/artifacts/ledger.py"
+        purpose: "Defines Artifact class for managing artifacts"
+        dependencies: ["src/common/db.py", "src/common/config.py", "hashlib", "uuid", "time", "pathlib", "json"]
+        connections: "Used by src/core/runtime.py for store_artifact; tested by tests/test_artifact.py, tests/test_ledger_integration.py"
+      - name: "src/artifacts/storage.py"
+        purpose: "Handles file storage operations (e.g., local file system writes)"
+        dependencies: ["src/common/config.py", "pathlib", "os"]
+        connections: "Used by src/artifacts/ledger.py"
+      - name: "src/common/__init__.py"
+        purpose: "Marks common as a package"
+        dependencies: []
+        connections: "Enables imports from src/common/*"
+      - name: "src/common/db.py"
+        purpose: "Manages async SQLite connections"
+        dependencies: ["aiosqlite", "src/common/config.py"]
+        connections: "Used by src/artifacts/ledger.py, src/core/runtime.py, src/main.py, tests/*"
+      - name: "src/common/config.py"
+        purpose: "Loads config.yaml and environment variables"
+        dependencies: ["pyyaml", "os"]
+        connections: "Used by src/artifacts/ledger.py, src/core/ai_proxy.py, src/core/github_client.py, src/core/runtime.py, src/main.py"
+      - name: "src/common/utils.py"
+        purpose: "Provides utilities (e.g., logging, hash calculation)"
+        dependencies: ["logging"]
+        connections: "Used by src/common/config.py, src/artifacts/ledger.py"
+      - name: "src/common/smp_signature.py"
+        purpose: "Handles signature validation for intents"
+        dependencies: ["pydantic", "src/common/config.py"]
+        connections: "Used by src/main.py for authentication"
+      - name: "src/common/intent_schema.py"
+        purpose: "Loads and validates JSON schemas"
+        dependencies: ["pydantic", "jsonschema", "json", "src/schemas/*"]
+        connections: "Used by src/main.py for intent validation"
+      - name: "src/core/__init__.py"
+        purpose: "Marks core as a package"
+        dependencies: []
+        connections: "Enables imports from src/core/*"
+      - name: "src/core/ai_proxy.py"
+        purpose: "Queries external AI models (e.g., OpenAI)"
+        dependencies: ["openai", "src/common/config.py"]
+        connections: "Used by src/core/runtime.py for query_ai; tested by tests/test_ai_proxy.py"
+      - name: "src/core/github_client.py"
+        purpose: "Interacts with GitHub API (e.g., protectBranch, clone)"
+        dependencies: ["pygithub", "src/common/config.py", "subprocess"]
+        connections: "Used by src/core/runtime.py; tested by tests/test_github_client.py"
+      - name: "src/core/runtime.py"
+        purpose: "Core engine for task execution (run_python, store_artifact, query_ai, clone, protectBranch)"
+        dependencies: ["src/artifacts/ledger.py", "src/runtime/executor.py", "src/core/ai_proxy.py", "src/core/github_client.py", "src/common/db.py", "base64", "json", "asyncio"]
+        connections: "Used by src/main.py; tested by tests/test_runtime.py"
+      - name: "src/core/task_manager.py"
+        purpose: "Manages task queuing and scheduling"
+        dependencies: ["src/core/runtime.py", "asyncio"]
+        connections: "Used by src/main.py"
+      - name: "src/core/auth.py"
+        purpose: "Implements API key validation"
+        dependencies: ["fastapi", "src/common/smp_signature.py"]
+        connections: "Used by src/main.py; tested by tests/test_auth.py"
+      - name: "src/runtime/__init__.py"
+        purpose: "Marks runtime as a package"
+        dependencies: []
+        connections: "Enables imports from src/runtime/*"
+      - name: "src/runtime/executor.py"
+        purpose: "Executes subprocesses (e.g., Python, shell commands)"
+        dependencies: ["subprocess", "asyncio"]
+        connections: "Used by src/core/runtime.py; tested by tests/test_runtime.py"
+      - name: "src/runtime/sandbox.py"
+        purpose: "Provides isolated execution environment"
+        dependencies: ["src/runtime/executor.py", "src/artifacts/ledger.py"]
+        connections: "Used by src/core/runtime.py"
+      - name: "src/api/__init__.py"
+        purpose: "Marks api as a package"
+        dependencies: []
+        connections: "Enables imports from src/api/*"
+      - name: "src/api/routes.py"
+        purpose: "Defines API endpoints and routes intents"
+        dependencies: ["fastapi", "src/common/smp_signature.py", "src/common/intent_schema.py", "src/core/ai_proxy.py", "src/core/github_client.py", "src/core/runtime.py", "src/core/task_manager.py"]
+        connections: "Used by src/main.py; tested by tests/test_api.py"
+      - name: "src/schemas/__init__.py"
+        purpose: "Marks schemas as a package"
+        dependencies: []
+        connections: "Enables imports from src/schemas/*"
+      - name: "src/schemas/protect_branch.json"
+        purpose: "JSON schema for protectBranch intent"
+        dependencies: []
+        connections: "Used by src/common/intent_schema.py, src/main.py"
+      - name: "src/schemas/store_artifact.json"
+        purpose: "JSON schema for store_artifact intent"
+        dependencies: []
+        connections: "Used by src/common/intent_schema.py, src/main.py"
+      - name: "src/schemas/run_python.json"
+        purpose: "JSON schema for run_python intent"
+        dependencies: []
+        connections: "Used by src/common/intent_schema.py, src/main.py"
+      - name: "src/schemas/query_ai.json"
+        purpose: "JSON schema for query_ai intent"
+        dependencies: []
+        connections: "Used by src/common/intent_schema.py, src/main.py"
+      - name: "src/schemas/clone.json"
+        purpose: "JSON schema for clone intent"
+        dependencies: []
+        connections: "Used by src/common/intent_schema.py, src/main.py"
+    tests:
+      - name: "tests/__init__.py"
+        purpose: "Marks tests as a package"
+        dependencies: []
+        connections: "Enables imports from tests/*"
+      - name: "tests/test_artifact.py"
+        purpose: "Tests src/artifacts/ledger.py"
+        dependencies: ["pytest", "pytest-asyncio", "src/artifacts/ledger.py", "src/common/db.py", "src/common/config.py"]
+        connections: "Uses real file system and database operations"
+      - name: "tests/test_runtime.py"
+        purpose: "Tests src/core/runtime.py, src/runtime/executor.py"
+        dependencies: ["pytest", "pytest-asyncio", "src/core/runtime.py", "src/runtime/executor.py", "src/common/db.py"]
+        connections: "Uses real subprocesses and database operations"
+      - name: "tests/test_github_client.py"
+        purpose: "Tests src/core/github_client.py (e.g., protectBranch, clone)"
+        dependencies: ["pytest", "pytest-asyncio", "src/core/github_client.py", "src/common/db.py", "src/common/config.py"]
+        connections: "Uses real GitHub API calls"
+      - name: "tests/test_ledger_integration.py"
+        purpose: "Tests src/artifacts/ledger.py with real file system and database operations"
+        dependencies: ["pytest", "pytest-asyncio", "src/artifacts/ledger.py", "src/common/db.py", "src/common/config.py"]
+        connections: "Uses Docker-mounted volumes"
+      - name: "tests/test_ai_proxy.py"
+        purpose: "Tests src/core/ai_proxy.py"
+        dependencies: ["pytest", "pytest-asyncio", "src/core/ai_proxy.py", "src/common/config.py"]
+        connections: "Uses real HTTP requests to OpenAI API"
+      - name: "tests/test_auth.py"
+        purpose: "Tests src/core/auth.py"
+        dependencies: ["pytest", "pytest-asyncio", "src/core/auth.py", "src/common/smp_signature.py"]
+        connections: "Verifies API key and signature validation"
+      - name: "tests/test_api.py"
+        purpose: "Tests src/api/routes.py"
+        dependencies: ["pytest", "pytest-asyncio", "src/api/routes.py", "src/common/intent_schema.py"]
+        connections: "Tests API endpoints with real HTTP requests"
+
+  glossary:
+    - term: "Access Node"
+      definition: "The application integrating AI and GitHub operations with artifact management"
+    - term: "Intent"
+      definition: "A JSON payload specifying a task (e.g., protectBranch, store_artifact) with task_id, task_type, params, and metadata"
+    - term: "Resonance Ledger"
+      definition: "The SQLite ledger table for immutable artifact records"
+    - term: "Artifact"
+      definition: "A file or data object stored with metadata and integrity hash (src/artifacts/ledger.py)"
+    - term: "Sandbox"
+      definition: "An isolated environment for secure code execution (src/runtime/sandbox.py)"
+    - term: "Executor"
+      definition: "A component for running subprocesses (src/runtime/executor.py)"
+    - term: "RuntimeManager"
+      definition: "The core engine for task scheduling and execution (src/core/runtime.py)"
+    - term: "AIProxy"
+      definition: "A module for querying external AI models (src/core/ai_proxy.py)"
+    - term: "GitHubClient"
+      definition: "A module for GitHub API interactions (src/core/github_client.py)"
+    - term: "TaskManager"
+      definition: "A module for task queuing (src/core/task_manager.py)"
+    - term: "Quantum Signature"
+      definition: "A placeholder for cryptographic signature validation (src/common/smp_signature.py)"
+    - term: "Restricted Use License"
+      definition: "The proprietary license requiring explicit permission from Logan Royce Lorentz"
+
+  updates:
+    - file: "LICENSE"
+      original: "Standard MIT License"
+      update: "Changed to 'MIT License – Restricted Use' with explicit permission required from Logan Royce Lorentz (Logan.lorentz9@gmail.com)"
+      reason: "Enforce proprietary restrictions"
+    - file: "pyproject.toml"
+      original: "Basic metadata and dependencies"
+      update: "Set license = 'Proprietary', added jsonschema==4.23.0, updated authors to 'Logan Royce Lorentz <Logan.lorentz9@gmail.com>'"
+      reason: "Support restricted license and schema validation"
+    - file: "requirements.txt"
+      original: "Listed aiosqlite, pyyaml, openai, pygithub, fastapi, uvicorn"
+      update: "Added jsonschema==4.23.0"
+      reason: "Support schema validation"
+    - file: "Dockerfile"
+      original: "Built image with Poetry"
+      update: "Added LABEL maintainer='Logan Royce Lorentz <Logan.lorentz9@gmail.com>', LABEL license='Proprietary', ensured all files copied"
+      reason: "Align with restricted license and include tests"
+    - file: "config.yaml"
+      original: "Basic configuration for API keys"
+      update: "Added database.url and storage.local.path"
+      reason: "Support persistence and testing"
+    - file: "src/main.py"
+      original: "Basic FastAPI server"
+      update: "Added API key validation, protectBranch schema validation"
+      reason: "Enforce license and support new intent"
+    - file: "src/artifacts/ledger.py"
+      original: "Artifact class without metadata"
+      update: "Added metadata column to ledger table"
+      reason: "Support task metadata and test_ledger_integration.py"
+    - file: "src/core/runtime.py"
+      original: "Handled run_python, store_artifact, query_ai, clone"
+      update: "Added protectBranch task handling"
+      reason: "Support new intent"
+    - file: "src/core/github_client.py"
+      original: "Handled clone, create_issue"
+      update: "Added protect_branch method"
+      reason: "Support protectBranch intent"
+    - file: "tests/test_ledger_integration.py"
+      original: "Used mocks for file system, UUID, timestamp"
+      update: "Removed mocks, used real file system and SQLite with Docker volumes"
+      reason: "Comply with 'no mock' directive"
+    - file: "tests/test_github_client.py"
+      original: "Tested clone, create_issue"
+      update: "Added test_protect_branch, test_protect_branch_unauthorized"
+      reason: "Verify protectBranch functionality"
+
+  visual_map:
+    mermaid: |
+      graph TD
+        A[Client] -- Intent Payload --> B[API<br>src/main.py]
+        B -- Validates Signature --> C[SMPSignature<br>src/common/smp_signature.py]
+        B -- Validates Intent --> D[IntentSchema<br>src/common/intent_schema.py]
+        C --> B
+        D --> B
+        
+        subgraph Core
+            E[RuntimeManager<br>src/core/runtime.py]
+            F[Executor<br>src/runtime/executor.py]
+            G[Sandbox<br>src/runtime/sandbox.py]
+            H[Artifact<br>src/artifacts/ledger.py]
+            I[Database<br>src/common/db.py]
+        end
+
+        subgraph Adapters
+            J[AIProxy<br>src/core/ai_proxy.py]
+            K[GitHubClient<br>src/core/github_client.py]
+        end
+
+        B -- Routes Tasks --> E
+        E -- Executes Tasks --> F
+        E -- Uses Sandbox --> G
+        G -- Calls Executor --> F
+        E -- Stores Artifacts --> H
+        H -- Reads/Writes --> I
+        
+        E -- Queries AI --> J
+        J -- HTTP Request --> L(External AI Service)
+        
+        E -- Git Operations --> K
+        K -- HTTP Request --> M(GitHub API)
+
+        classDef default fill:#fff,stroke:#333,stroke-width:2px;
+        classDef layer fill:#f9f,stroke:#f0f,stroke-width:2px;
+        classDef adapter fill:#9cf,stroke:#36c,stroke-width:2px;
+        class B,C,D,E,G,H,J,K layer
+        class F,I,L,M adapter
+
+  setup_instructions:
+    create_project_files:
+      description: "Ensure all 38 files are in the directory structure"
+      missing_files:
+        - file: "src/common/smp_signature.py"
+          content: |
+            from pydantic import BaseModel
+            from src.common.config import get_config_value
+
+            class SMPSignatureError(Exception):
+                pass
+
+            class SMPSignature(BaseModel):
+                signature: str
+                payload: dict
+
+                def verify(self):
+                    expected_key = get_config_value("app.secret_key")
+                    if self.signature != expected_key:  # Simplified; use real crypto in production
+                        raise SMPSignatureError("Invalid signature")
+                    return True
+        - file: "src/core/task_manager.py"
+          content: |
+            import asyncio
+            from src.core.runtime import RuntimeManager
+
+            class TaskManager:
+                def __init__(self):
+                    self.runtime = RuntimeManager()
+                    self.queue = asyncio.Queue()
+
+                async def enqueue_task(self, payload: dict, db: any):
+                    await self.queue.put(payload)
+                    return await self.process_queue(db)
+
+                async def process_queue(self, db: any):
+                    while not self.queue.empty():
+                        payload = await self.queue.get()
+                        result = await self.runtime.schedule_task(payload, db)
+                        self.queue.task_done()
+                        return result
+                    return {"status": "no tasks"}
+    create_config_yaml:
+      content: |
+        runtime:
+          max_concurrent_tasks: 10
+          default_timeout: 30
+          cleanup_interval: 300
+        sandbox:
+          timeout: 5
+        ai:
+          api_key: "your-openai-api-key"
+        github:
+          access_token: "your-github-access-token"
+        storage:
+          default: local
+          local:
+            path: /app/storage/artifacts
+            base_url: /storage
+        security:
+          allowed_roles: ["admin", "devops", "ai_operator"]
+        app:
+          secret_key: your-secret-key
+        database:
+          url: sqlite:////app/data/ledger.db
+    build_and_run:
+      commands:
+        - "docker build -t access-node ."
+        - |
+          docker run -p 8000:8000 -v $(pwd)/data:/app/data -v $(pwd)/storage:/app/storage \
+            -e CONFIG_PATH=/app/config.yaml \
+            access-node
+    docker_compose:
+      file: "docker-compose.yml"
+      content: |
+        version: '3.8'
+        services:
+          access-node:
+            build: .
+            ports:
+              - "8000:8000"
+            volumes:
+              - ./data:/app/data
+              - ./storage:/app/storage
+              - ./config.yaml:/app/config.yaml
+            environment:
+              - CONFIG_PATH=/app/config.yaml
+      run_command: "docker-compose.yml"
+      content: |
+        version: '3.8'
+        services:
+          access-node:
+            build: .
+            ports:
+              - "8000:8000"
+            volumes:
+              - ./data:/app/data
+              - ./storage:/app/storage
+              - ./config.yaml:/app/config.yaml
+            environment:
+              - CONFIG_PATH=/app/config.yaml
+      run_command: "docker-compose up"
+    run_tests:
+      command: |
+        docker run --rm -v $(pwd)/data:/app/data -v $(pwd)/storage:/app/storage \
+          -e CONFIG_PATH=/app/config.yaml \
+          access-node poetry run pytest tests/ -v
+    test_protect_branch:
+      command: |
+        curl -X POST http://localhost:8000/tasks \
+          -H "Content-Type: application/json" \
+          -H "X-API-Key: your-authorized-api-key" \
+          -d '{
+            "task_id": "task-protect-1",
+            "task_type": "protectBranch",
+            "intent": "protectBranch",
+            "params": {
+              "repository": {
+                "owner": "your-username",
+                "name": "test-repo"
+              },
+              "branch": "main",
+              "protectionRules": {
+                "requiredStatusChecks": {
+                  "strict": true,
+                  "contexts": ["ci/tests"]
+                },
+                "enforceAdmins": true,
+                "requiredPullRequestReviews": {
+                  "dismissStaleReviews": true,
+                  "requireCodeOwnerReviews": true
+                },
+                "restrictions": {
+                  "users": ["your-username"],
+                  "teams": []
+                }
+              }
+            },
+            "metadata": {
+              "initiator": "rs_user:admin:lorentz",
+              "timestamp": "2025-09-17T00:00:00Z"
+            }
+          }'
+
+  next_steps:
+    - action: "Confirm File List"
+      description: "Provide the exact list of 38 files if the structure is incorrect"
+    - action: "Implement Missing Files"
+      description: "Provide full implementations for src/artifacts/storage.py, src/api/routes.py, src/schemas/store_artifact.json, etc."
+    - action: "Enhancements"
+      description: "Add artifact encryption, advanced logging, or task prioritization"
+    - action: "Visualization"
+      description: "Render the Mermaid diagram in a viewer or create a detailed architecture diagram"
