@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yourdomain.com/intents/manifest/protectBranch/v1",
+  "title": "Protect Branch Intent Manifest",
+  "description": "Intent schema to enforce protection rules on a specific GitHub branch.",
+  "version": "1.0.0",
+  "type": "object",
+  "required": ["intent", "repository", "branch"],
+  "properties": {
+    "intent": {
+      "type": "string",
+      "const": "protectBranch",
+      "description": "Identifier for this intent type."
+    },
+    "repository": {
+      "type": "object",
+      "required": ["owner", "name"],
+      "properties": {
+        "owner": {
+          "type": "string",
+          "description": "GitHub repository owner (user or organization)."
+        },
+        "name": {
+          "type": "string",
+          "description": "Name of the GitHub repository."
+        }
+      },
+      "description": "Target repository for the branch protection."
+    },
+    "branch": {
+      "type": "string",
+      "description": "The branch name to apply protection rules to."
+    },
+    "protectionRules": {
+      "type": "object",
+      "properties": {
+        "requiredStatusChecks": {
+          "type": ["object", "null"],
+          "description": "Optional required status checks (null disables).",
+          "properties": {
+            "strict": { "type": "boolean", "description": "Require branches to be up-to-date before merging." },
+            "contexts": { "type": "array", "items": { "type": "string" }, "description": "Status check contexts to enforce." }
+          },
+          "required": ["strict", "contexts"]
+        },
+        "enforceAdmins": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to enforce branch protection for admins."
+        },
+        "requiredPullRequestReviews": {
+          "type": "object",
+          "properties": {
+            "dismissStaleReviews": { "type": "boolean", "default": true },
+            "requireCodeOwnerReviews": { "type": "boolean", "default": true }
+          },
+          "required": ["dismissStaleReviews", "requireCodeOwnerReviews"],
+          "description": "Pull request review rules."
+        },
+        "restrictions": {
+          "type": ["object", "null"],
+          "description": "Optional push restrictions for specific users or teams.",
+          "properties": {
+            "users": { "type": "array", "items": { "type": "string" } },
+            "teams": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      },
+      "required": ["enforceAdmins", "requiredPullRequestReviews"]
+    },
+    "timeout": {
+      "type": "integer",
+      "default": 30,
+      "description": "Optional timeout in seconds for this operation."
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Optional metadata for auditing, logging, or tracking the intent.",
+      "properties": {
+        "requestId": { "type": "string" },
+        "initiator": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      }
+    }
+  },
+  "additionalProperties": false
+}
