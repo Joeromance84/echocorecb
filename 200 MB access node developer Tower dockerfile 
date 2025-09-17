@@ -1,0 +1,47 @@
+# developer_tower/Dockerfile
+# Use a base image with CUDA and Python pre-installed for GPU support
+FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
+
+# Set environment variables for Python
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-venv \
+    python3-pip \
+    python3-dev \
+    # For gRPC health checking
+    grpc-tools \
+    # Clean up APT lists
+    && rm -rf /var/lib/apt/lists/*
+
+# Create a virtual environment and install dependencies
+WORKDIR /app
+COPY requirements.txt .
+RUN python3.11 -m venv venv && \
+    . venv/bin/activate && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copy project code
+COPY . .
+
+# Compile Protocol Buffers (this must be run after requirements are installed)
+RUN . venv/bin/activate && \
+    python3.11 -m grpc_tools.protoc -I. \
+    --python_out=. \
+    --grpc_python_out=. \
+    ./tower_api/v1/tower.proto
+
+# Create and use a non-root user for security
+RUN useradd -m -u 1000 developer && \
+    chown -R developer:developer /app
+
+USER developer
+
+# Expose gRPC port
+EXPOSE 50051
+
+# Run the gRPC server
+CMD ["python3.11", "./main.py"]
