@@ -1,0 +1,462 @@
+import aiohttp
+import asyncio
+import hmac
+import hashlib
+import base64
+import time
+import json
+import os
+from typing import Dict, Any, Optional, List, Union, AsyncGenerator
+from datetime import datetime, timezone
+from pathlib import Path
+from pydantic import BaseModel, Field, validator
+import aiofiles
+from common.utils import get_logger, compute_sha256, generate_uuid
+from artifact.ledger import ArtifactMetadata, ArtifactQuery, ArtifactStats
+
+logger = get_logger(__name__)
+
+class ClientError(Exception):
+    """Custom exception for client-related errors with structured error data."""
+    def __init__(self, message: str, status_code: Optional[int] = None, error_data: Optional[Dict] = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.error_data = error_data or {}
+        self.request_id = error_data.get('request_id') if error_data else None
+
+class AccessNodeClient:
+    """
+    Production-ready client for interacting with the Access Node API.
+    
+    Features:
+    - Quantum Signature Handshake authentication
+    - Comprehensive error handling with structured errors
+    - Automatic session management
+    - Retry mechanism for transient failures
+    - Request/response validation
+    - Connection pooling and timeout management
+    """
+    
+    def __init__(
+        self, 
+        base_url: str, 
+        quantum_secret: str, 
+        originator: str,
+        timeout: int = 30,
+        max_retries: int = 3,
+        retry_delay: float = 1.0,
+        connection_limit: int = 100,
+        connection_limit_per_host: int = 20
+    ):
+        """
+        Initialize the client.
+        
+        Args:
+            base_url: Base URL of the Access Node (e.g., http://localhost:8000)
+            quantum_secret: HMAC secret for Quantum Signature Handshake
+            originator: Resonance Signature (e.g., rs_user:lorentz...)
+            timeout: Request timeout in seconds
+            max_retries: Maximum number of retries for failed requests
+            retry_delay: Delay between retries in seconds
+            connection_limit: Maximum number of simultaneous connections
+            connection_limit_per_host: Maximum number of simultaneous connections to the same host
+        """
+        self.base_url = base_url.rstrip('/')
+        self.quantum_secret = quantum_secret
+        self.originator = originator
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
+        self.connection_limit = connection_limit
+        self.connection_limit_per_host = connection_limit_per_host
+        self.session = None
+        self._lock = asyncio.Lock()
+        self._request_counter = 0
+    
+    async def __aenter__(self):
+        """Async context manager entry."""
+        await self.initialize()
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit."""
+        await self.close()
+    
+    async def initialize(self):
+        """Initialize the HTTP session with connection pooling."""
+        async with self._lock:
+            if self.session is None:
+                timeout = aiohttp.ClientTimeout(
+                    total=self.timeout,
+                    connect=10,
+                    sock_connect=10,
+                    sock_read=30
+                )
+                connector = aiohttp.TCPConnector(
+                    limit=self.connection_limit,
+                    limit_per_host=self.connection_limit_per_host,
+                    enable_cleanup_closed=True,
+                    force_close=False
+                )
+                self.session = aiohttp.ClientSession(
+                    timeout=timeout,
+                    connector=connector,
+                    trust_env=True
+                )
+                logger.info(f"Access Node client initialized for {self.base_url}")
+    
+    async def close(self):
+        """Close the HTTP session."""
+        async with self._lock:
+            if self.session:
+                await self.session.close()
+                self.session = None
+                logger.info("Access Node client session closed")
+    
+    def _get_request_id(self) -> str:
+        """Generate a unique request ID for tracing."""
+        self._request_counter += 1
+        return f"req_{self._request_counter}_{generate_uuid()[:8]}"
+    
+    async def _generate_signature(self, method: str, path: str, payload_bytes: bytes) -> str:
+        """
+        Generate Quantum Signature Handshake over the actual request payload.
+        """
+        timestamp = int(time.time())
+        nonce = f"nonce-{timestamp}-{hashlib.sha256(os.urandom(8)).hexdigest()[:8]}"
+        payload_hash = hashlib.sha256(payload_bytes).hexdigest()
+        signing_string = f"{method}\n{path}\n{timestamp}\n{nonce}\n{payload_hash}"
+        signature = base64.b64encode(
+            hmac.new(
+                self.quantum_secret.encode('utf-8'),
+                signing_string.encode('utf-8'),
+                hashlib.sha256
+            ).digest()
+        ).decode('utf-8')
+        return f"Quantum v1 {signature} {timestamp} {nonce}"
+    
+    async def _handle_response(self, response: aiohttp.ClientResponse, request_id: str) -> Any:
+        """Handle HTTP response with comprehensive error handling."""
+        try:
+            content = await response.text()
+            if response.status >= 400:
+                try:
+                    error_data = json.loads(content)
+                    error_data['request_id'] = request_id
+                    message = error_data.get('detail', {}).get('error', content)
+                    raise ClientError(
+                        f"API request {request_id} failed ({response.status}): {message}",
+                        status_code=response.status,
+                        error_data=error_data
+                    )
+                except json.JSONDecodeError:
+                    raise ClientError(
+                        f"API request {request_id} failed ({response.status}): {content}",
+                        status_code=response.status,
+                        error_data={'request_id': request_id}
+                    )
+            if content.strip():
+                try:
+                    return json.loads(content)
+                except json.JSONDecodeError as e:
+                    raise ClientError(f"Invalid JSON response for {request_id}: {str(e)}")
+            return None
+        except ClientError:
+            raise
+        except Exception as e:
+            raise ClientError(f"Failed to process response for {request_id}: {str(e)}")
+    
+    async def _request_with_retry(
+        self,
+        method: str,
+        path: str,
+        **kwargs
+    ) -> Any:
+        """Execute HTTP request with retry mechanism."""
+        request_id = self._get_request_id()
+        last_exception = None
+        for attempt in range(self.max_retries):
+            try:
+                await self.initialize()
+                payload = kwargs.get('data') or kwargs.get('json') or b''
+                if isinstance(payload, (dict, list)):
+                    payload_bytes = json.dumps(payload).encode('utf-8')
+                elif isinstance(payload, str):
+                    payload_bytes = payload.encode('utf-8')
+                else:
+                    payload_bytes = payload
+                signature = await self._generate_signature(method, path, payload_bytes)
+                headers = kwargs.get('headers', {})
+                headers.update({
+                    'Authorization': signature,
+                    'X-Originator': self.originator,
+                    'X-Request-ID': request_id,
+                    'User-Agent': f'AccessNodeClient/1.0 ({self.originator})'
+                })
+                kwargs['headers'] = headers
+                logger.debug(f"Request {request_id}: {method} {path} (attempt {attempt + 1})")
+                async with self.session.request(method, f"{self.base_url}{path}", **kwargs) as response:
+                    result = await self._handle_response(response, request_id)
+                    logger.debug(f"Request {request_id} completed: {response.status}")
+                    return result
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                last_exception = e
+                if attempt < self.max_retries - 1:
+                    logger.warning(f"Request {request_id} failed (attempt {attempt + 1}/{self.max_retries}): {e}")
+                    await asyncio.sleep(self.retry_delay * (2 ** attempt))
+                    continue
+                raise ClientError(f"Request {request_id} failed after {self.max_retries} attempts: {str(e)}")
+            except ClientError:
+                raise
+            except Exception as e:
+                raise ClientError(f"Unexpected error during request {request_id}: {str(e)}")
+        raise last_exception or ClientError(f"Request {request_id} failed unexpectedly")
+    
+    async def upload_artifact(
+        self,
+        file_path: Union[str, Path],
+        mime_type: Optional[str] = None,
+        tags: Optional[Dict[str, Any]] = None,
+        expires_at: Optional[datetime] = None,
+        access_control: Optional[Dict[str, List[str]]] = None,
+        compression: Optional[str] = None
+    ) -> ArtifactUploadResult:
+        """Upload an artifact to the Access Node."""
+        path = "/artifacts/upload"
+        async with aiofiles.open(file_path, 'rb') as f:
+            file_content = await f.read()
+        form_data = aiohttp.FormData()
+        form_data.add_field('file', file_content, filename=Path(file_path).name, content_type=mime_type)
+        form_data.add_field('originator', self.originator)
+        if mime_type:
+            form_data.add_field('mime_type', mime_type)
+        if tags:
+            form_data.add_field('tags', json.dumps(tags))
+        if expires_at:
+            form_data.add_field('expires_at', expires_at.isoformat())
+        if access_control:
+            form_data.add_field('access_control', json.dumps(access_control))
+        if compression:
+            form_data.add_field('compression', compression)
+        try:
+            result = await self._request_with_retry(
+                "POST", path,
+                data=form_data,
+                params={"originator": self.originator}
+            )
+            return ArtifactUploadResult(**result)
+        except ClientError as e:
+            logger.error(f"Failed to upload artifact {file_path}: {e}")
+            raise
+    
+    async def download_artifact(
+        self, 
+        artifact_id: str, 
+        save_path: Optional[Union[str, Path]] = None
+    ) -> ArtifactDownloadResult:
+        """Download an artifact from the Access Node."""
+        path = f"/artifacts/{artifact_id}/download"
+        try:
+            async with self.session.get(
+                f"{self.base_url}{path}",
+                params={"originator": self.originator},
+                headers={'Authorization': await self._generate_signature("GET", path, b'')}
+            ) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise ClientError(f"Download failed: {response.status} - {error_text}")
+                content = await response.read()
+                metadata = {
+                    "artifact_id": response.headers.get("X-Artifact-ID", artifact_id),
+                    "sha256_hash": response.headers.get("X-SHA256-Hash", compute_sha256(content)),
+                    "size_bytes": len(content),
+                    "mime_type": response.headers.get("Content-Type"),
+                    "content": content
+                }
+                if save_path:
+                    async with aiofiles.open(save_path, 'wb') as f:
+                        await f.write(content)
+                return ArtifactDownloadResult(**metadata)
+        except Exception as e:
+            logger.error(f"Failed to download artifact {artifact_id}: {e}")
+            raise ClientError(f"Download failed: {str(e)}")
+    
+    async def stream_artifact(self, artifact_id: str) -> AsyncGenerator[bytes, None]:
+        """Stream an artifact from the Access Node."""
+        path = f"/artifacts/{artifact_id}/download"
+        try:
+            async with self.session.get(
+                f"{self.base_url}{path}",
+                params={"originator": self.originator},
+                headers={'Authorization': await self._generate_signature("GET", path, b'')}
+            ) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise ClientError(f"Stream download failed: {response.status} - {error_text}")
+                async for chunk in response.content.iter_chunked(8192):
+                    yield chunk
+        except Exception as e:
+            logger.error(f"Failed to stream artifact {artifact_id}: {e}")
+            raise ClientError(f"Stream download failed: {str(e)}")
+    
+    async def query_artifacts(self, query: ArtifactQuery) -> List[ArtifactMetadata]:
+        """Query artifacts with advanced filtering."""
+        path = "/artifacts/query"
+        params = query.model_dump(exclude_none=True)
+        for field in ['created_after', 'created_before', 'expires_before']:
+            if field in params and isinstance(params[field], datetime):
+                params[field] = params[field].isoformat()
+        try:
+            result = await self._request_with_retry("GET", path, params=params)
+            return [ArtifactMetadata(**item) for item in result]
+        except ClientError as e:
+            logger.error(f"Failed to query artifacts: {e}")
+            raise
+    
+    async def get_artifact_stats(self) -> ArtifactStats:
+        """Get artifact statistics."""
+        path = "/artifacts/stats"
+        try:
+            result = await self._request_with_retry("GET", path)
+            return ArtifactStats(**result)
+        except ClientError as e:
+            logger.error(f"Failed to get artifact stats: {e}")
+            raise
+    
+    async def update_artifact_metadata(
+        self,
+        artifact_id: str,
+        updates: Dict[str, Any]
+    ) -> ArtifactMetadata:
+        """Update artifact metadata."""
+        path = f"/artifacts/{artifact_id}/metadata"
+        try:
+            result = await self._request_with_retry("PATCH", path, json=updates)
+            return ArtifactMetadata(**result)
+        except ClientError as e:
+            logger.error(f"Failed to update artifact metadata: {e}")
+            raise
+    
+    async def delete_artifact(self, artifact_id: str) -> bool:
+        """Delete an artifact."""
+        path = f"/artifacts/{artifact_id}"
+        try:
+            result = await self._request_with_retry("DELETE", path)
+            return result is True
+        except ClientError as e:
+            logger.error(f"Failed to delete artifact: {e}")
+            raise
+    
+    async def run_python(
+        self, 
+        code: str, 
+        environment: Optional[Dict[str, str]] = None,
+        timeout_seconds: int = 60
+    ) -> JobResponse:
+        """Run Python code via the Access Node."""
+        path = "/run/python"
+        intent = {
+            "manifest": {
+                "type": "runPython",
+                "version": "v1",
+                "code": code,
+                "environment": environment or {},
+                "timeout_seconds": timeout_seconds
+            },
+            "originator": self.originator
+        }
+        try:
+            result = await self._request_with_retry("POST", path, json=intent)
+            return JobResponse(**result)
+        except ClientError as e:
+            logger.error(f"Failed to run Python code: {e}")
+            raise
+    
+    async def query_ai(
+        self, 
+        query: str, 
+        model: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 1000
+    ) -> JobResponse:
+        """Query AI via the Access Node."""
+        path = "/query/ai"
+        intent = {
+            "manifest": {
+                "type": "queryAI",
+                "version": "v1",
+                "query": query,
+                "model": model,
+                "temperature": temperature,
+                "max_tokens": max_tokens
+            },
+            "originator": self.originator
+        }
+        try:
+            result = await self._request_with_retry("POST", path, json=intent)
+            return JobResponse(**result)
+        except ClientError as e:
+            logger.error(f"Failed to query AI: {e}")
+            raise
+    
+    async def health_check(self) -> Dict[str, Any]:
+        """Check Access Node health."""
+        path = "/health"
+        try:
+            original_timeout = self.timeout
+            self.timeout = 5
+            result = await self._request_with_retry("GET", path)
+            return result
+        except ClientError as e:
+            return {"status": "unhealthy", "error": str(e)}
+        finally:
+            self.timeout = original_timeout
+
+# Example usage
+async def main():
+    client = AccessNodeClient(
+        base_url="http://localhost:8000",
+        quantum_secret="your_hmac_secret",
+        originator="rs_user:lorentz" + "x" * 61,
+        timeout=30,
+        max_retries=3
+    )
+    async with client:
+        health = await client.health_check()
+        logger.info(f"Access Node health: {health}")
+        
+        upload_result = await client.upload_artifact(
+            file_path="test.txt",
+            mime_type="text/plain",
+            tags={"project": "test"},
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            access_control={"read": ["rs_user:other"], "write": [client.originator]}
+        )
+        logger.info(f"Uploaded artifact: {upload_result.artifact_id}")
+        
+        async with aiofiles.open("streamed.txt", 'wb') as f:
+            async for chunk in client.stream_artifact(upload_result.artifact_id):
+                await f.write(chunk)
+        
+        query = ArtifactQuery(tags={"project": "test"})
+        artifacts = await client.query_artifacts(query)
+        logger.info(f"Found {len(artifacts)} artifacts")
+        
+        stats = await client.get_artifact_stats()
+        logger.info(f"Stats: {stats.total_artifacts} artifacts")
+        
+        updates = {"tags": {"project": "updated"}}
+        updated_metadata = await client.update_artifact_metadata(upload_result.artifact_id, updates)
+        logger.info(f"Updated metadata: {updated_metadata.tags}")
+        
+        await client.delete_artifact(upload_result.artifact_id)
+        
+        python_result = await client.run_python("print('Hello from Access Node!')")
+        logger.info(f"Python result: {python_result.result}")
+        
+        ai_result = await client.query_ai("What is the capital of France?")
+        logger.info(f"AI result: {ai_result.result}")
+
+if __name__ == "__main__":
+    from datetime import timedelta
+    asyncio.run(main())
